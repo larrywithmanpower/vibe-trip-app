@@ -228,7 +228,6 @@ nav {
 }
 
 .grid-container {
-
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 1.5rem;
@@ -289,6 +288,16 @@ nav {
 }
 
 @media (max-width: 768px) {
-    header { flex-direction: column; gap: 1rem; }
+    header { 
+        flex-direction: column; 
+        align-items: flex-start;
+        gap: 1.5rem; 
+    }
+    .logo { font-size: 1.8rem; }
+    nav { width: 100%; padding-bottom: 0.5rem; }
+    .summary-zone { grid-template-columns: 1fr; }
+    .grid-container { grid-template-columns: 1fr; }
+    .toast { left: 1rem; right: 1rem; bottom: 1rem; text-align: center; }
 }
+
 </style>
