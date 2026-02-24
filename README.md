@@ -47,6 +47,17 @@ npm run dev
 npm run build
 ```
 
+## 🌐 GitHub Pages 部署
+
+本專案已設定自動化部署流程：
+1. **GitHub Actions**：推送到 `main` 分支後會自動觸發 `.github/workflows/deploy.yml`。
+2. **Settings 設定**：
+   - 進入 GitHub 專案的 `Settings` > `Pages`。
+   - `Build and deployment` > `Source` 選擇 `Deploy from a branch`。
+   - `Branch` 選擇 `gh-pages` 分支，資料夾選擇 `/(root)`。
+3. **存取權限**：確保您在專案的 `Settings` > `Actions` > `General` 中，將 `Workflow permissions` 設為 `Read and write permissions`。
+
+
 ## 📂 檔案結構
 
 ```text
