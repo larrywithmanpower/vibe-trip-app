@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue';
 import ItineraryCard from './components/ItineraryCard.vue';
 import ImportZone from './components/ImportZone.vue';
+import PWAInstructions from './components/PWAInstructions.vue';
+
 
 // --- 配置區 ---
 const API_URL = "YOUR_GAS_API_URL"; 
@@ -141,8 +143,12 @@ onMounted(fetchData);
             />
         </div>
 
+
         <ImportZone :loading="loading" @save="handleSave" />
+        
+        <PWAInstructions />
     </main>
+
 
     <!-- Loading Overlay -->
     <div v-if="loading" class="loading-overlay">
