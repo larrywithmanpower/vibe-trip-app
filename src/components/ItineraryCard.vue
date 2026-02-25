@@ -8,8 +8,7 @@ const getMapsLink = (item) => {
 
 <template>
   <div class="glass-card itinerary-card">
-    <img v-if="item['照片URL']" :src="item['照片URL']" :alt="item['景點名稱']">
-    <div v-else class="img-placeholder"></div>
+    <div class="drag-handle" title="拖曳排序">⠿</div>
     
     <h4>{{ item['景點名稱'] || '未命名景點' }}</h4>
     
@@ -38,20 +37,48 @@ const getMapsLink = (item) => {
     border-radius: 16px;
     padding: 1.5rem;
     transition: transform 0.3s ease, border-color 0.3s ease;
+    position: relative; /* 為了讓 drag-handle 定位 */
 }
+
+.drag-handle {
+    position: absolute;
+    top: 0.8rem;
+    right: 0.8rem;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: var(--text-secondary);
+    cursor: grab;
+    font-size: 1.2rem;
+    opacity: 0.5;
+    transition: all 0.2s;
+    user-select: none;
+    z-index: 10;
+    background: rgba(255,255,255,0.05);
+    border-radius: 6px;
+}
+
+.itinerary-card:hover .drag-handle {
+    opacity: 1;
+    background: rgba(255,255,255,0.1);
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+@media (max-width: 768px) {
+    .glass-card {
+        padding: 1.2rem;
+    }
+}
+
 
 .glass-card:hover {
     transform: translateY(-4px);
     border-color: rgba(255, 255, 255, 0.2);
-}
-
-.itinerary-card img {
-    width: 100%;
-    height: 180px;
-    object-fit: cover;
-    border-radius: 12px;
-    margin-bottom: 1rem;
-    background: #1e293b;
 }
 
 .itinerary-card h4 {
@@ -69,6 +96,7 @@ const getMapsLink = (item) => {
     font-size: 0.9rem;
     color: var(--text-secondary);
     margin-bottom: 1rem;
+    word-break: break-word; /* 防止長文字撐開卡片 */
 }
 
 .address {
@@ -79,5 +107,6 @@ const getMapsLink = (item) => {
     color: var(--accent-color);
     cursor: pointer;
     text-decoration: none;
+    word-break: break-all; /* 防止長網址撐開卡片 */
 }
 </style>
