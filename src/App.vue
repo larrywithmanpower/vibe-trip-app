@@ -11,11 +11,12 @@ import PWAInstructions from './components/PWAInstructions.vue';
 const API_URL = import.meta.env.VITE_API_URL || ""; 
 
 // --- 狀態定義 ---
-const metadata = ref(JSON.parse(localStorage.getItem('metadata_cache') || '{"基礎資訊": "", "特別提醒": ""}'));
-const currentSheet = ref(localStorage.getItem('last_sheet') || "預設行程");
-const allSheets = ref(JSON.parse(localStorage.getItem('sheets_cache') || '["預設行程"]'));
-const itineraryData = ref(JSON.parse(localStorage.getItem('data_cache') || '[]'));
+const currentSheet = ref(localStorage.getItem('currentSheet') || '行程 1');
+const allSheets = ref(JSON.parse(localStorage.getItem('allSheets') || '["行程 1"]'));
+const itineraryData = ref(JSON.parse(localStorage.getItem(`data_cache_${currentSheet.value}`) || '[]'));
+const metadata = ref(JSON.parse(localStorage.getItem('metadata') || '{}'));
 
+const editingItem = ref(null);
 const loading = ref(false); // 控制全螢幕載入 (僅在完全沒資料時使用)
 const isFetching = ref(false); // 控制背景同步狀態
 const isSyncing = ref(false); // 控制存檔中狀態
@@ -29,7 +30,7 @@ let sortableInstance = null;
 
 // 當切換分頁時，儲存名稱並更新氣象
 watch(currentSheet, (newVal) => {
-    localStorage.setItem('last_sheet', newVal);
+    localStorage.setItem('currentSheet', newVal);
     updateRegionalWeather();
 });
 
@@ -115,6 +116,11 @@ const syncToGAS = async (payload) => {
     }
 };
 
+const saveLocal = () => {
+    localStorage.setItem(`data_cache_${currentSheet.value}`, JSON.stringify(itineraryData.value));
+    localStorage.setItem('metadata', JSON.stringify(metadata.value));
+};
+
 const fetchData = async () => {
     if (!API_URL) return;
 
@@ -137,7 +143,7 @@ const fetchData = async () => {
         
         if (Array.isArray(sheets)) {
             allSheets.value = sheets;
-            localStorage.setItem('sheets_cache', JSON.stringify(sheets));
+            localStorage.setItem('allSheets', JSON.stringify(sheets));
         }
 
         if (Array.isArray(data)) {
@@ -147,9 +153,7 @@ const fetchData = async () => {
             itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID);
             
             // 更新特定分頁快取與全域快取
-            localStorage.setItem(sheetCacheKey, JSON.stringify(itineraryData.value));
-            localStorage.setItem('data_cache', JSON.stringify(itineraryData.value));
-            localStorage.setItem('metadata_cache', JSON.stringify(metadata.value));
+            saveLocal();
         }
     } catch (err) {
         console.error('Fetch error:', err);
@@ -297,14 +301,12 @@ const handleSave = async (parsedData) => {
 };
 
 const handleAddManual = async (newItem) => {
-    showAddModal.value = false;
     isSyncing.value = true;
+    showAddModal.value = false;
     
-    // 樂觀更新 UI 與快取
+    // 樂觀更新
     itineraryData.value.push(newItem);
-    localStorage.setItem(`data_cache_${currentSheet.value}`, JSON.stringify(itineraryData.value));
-    localStorage.setItem('data_cache', JSON.stringify(itineraryData.value));
-    nextTick(initSortable);
+    saveLocal();
 
     const result = await syncToGAS({
         action: "write",
@@ -314,13 +316,48 @@ const handleAddManual = async (newItem) => {
     });
 
     if (result.success) {
-        triggerToast('已新增一個景點');
+        triggerToast('景點已新增');
         updateRegionalWeather();
     } else {
-        triggerToast(result.error || '新增失敗', 'error');
+        triggerToast(result.error || '同步失敗', 'error');
+        await fetchData(); // 失敗時回滾
+    }
+    isSyncing.value = false;
+};
+
+const handleUpdateManual = async (updatedItem) => {
+    isSyncing.value = true;
+    showAddModal.value = false;
+    editingItem.value = null;
+
+    // 樂觀更新
+    const index = itineraryData.value.findIndex(item => item.ID === updatedItem.ID);
+    if (index !== -1) {
+        itineraryData.value[index] = updatedItem;
+        saveLocal();
+    }
+
+    // 更新雲端 (使用 syncAll 覆寫)
+    const result = await syncToGAS({
+        action: "syncAll",
+        sheetName: currentSheet.value,
+        data: itineraryData.value,
+        metadata: metadata.value
+    });
+
+    if (result.success) {
+        triggerToast('景點資料已更新');
+        updateRegionalWeather();
+    } else {
+        triggerToast(result.error || '更新同步失敗', 'error');
         await fetchData();
     }
     isSyncing.value = false;
+};
+
+const handleEditClick = (item) => {
+    editingItem.value = item;
+    showAddModal.value = true;
 };
 
 const handleDeleteItem = (targetItem) => {
@@ -334,8 +371,7 @@ const handleDeleteItem = (targetItem) => {
             isSyncing.value = true;
             // 樂觀更新 UI 與快取
             itineraryData.value = itineraryData.value.filter(item => item !== targetItem);
-            localStorage.setItem(`data_cache_${currentSheet.value}`, JSON.stringify(itineraryData.value));
-            localStorage.setItem('data_cache', JSON.stringify(itineraryData.value));
+            saveLocal();
 
             // 同步到雲端 (使用 syncAll 覆寫當前分頁)
             const result = await syncToGAS({
@@ -362,8 +398,7 @@ const handleReorder = async (oldIdx, newIdx) => {
     const [movedItem] = items.splice(oldIdx, 1);
     items.splice(newIdx, 0, movedItem);
     itineraryData.value = items;
-    localStorage.setItem(`data_cache_${currentSheet.value}`, JSON.stringify(items));
-    localStorage.setItem('data_cache', JSON.stringify(items));
+    saveLocal();
 
     isSyncing.value = true;
     const result = await syncToGAS({
@@ -442,6 +477,7 @@ const addLocation = () => {
                 allSheets.value.push(name);
                 currentSheet.value = name;
                 itineraryData.value = [];
+                saveLocal();
             }
         }
     });
@@ -511,9 +547,20 @@ onMounted(fetchData);
     </header>
 
     <main>
-        <div v-if="itineraryData.length === 0 && !loading" class="empty-state">
-            <h2>🏖️ 目前尚無行程資料</h2>
-            <p>請點擊上方 📥 按鈕匯入資料，或用 ➕ 手動新增卡片。</p>
+        <!-- 背景同步中的弱提示 (如果已有資料) -->
+        <div v-if="isFetching && itineraryData.length > 0" class="top-sync-indicator">
+            <div class="mini-spinner"></div>
+            正在檢查雲端更新...
+        </div>
+
+        <div v-if="itineraryData.length === 0 && !loading" class="empty-state glass-card">
+            <div class="empty-icon">🏝️</div>
+            <h2>尚未發現行程資料</h2>
+            <p>目前此分頁是空的，您可以從 Google Sheets 手動新增資料，或是點擊上方「➕」開始規劃第一筆行程！</p>
+            <div class="empty-actions">
+                <button @click="showAddModal = true" class="primary-btn">➕ 新增第一個景點</button>
+                <button @click="fetchData" class="secondary-btn">🔄 重新整理</button>
+            </div>
         </div>
 
         <div v-else class="grid-container">
@@ -522,6 +569,7 @@ onMounted(fetchData);
                 :key="item.ID || idx" 
                 :item="item" 
                 @delete="handleDeleteItem"
+                @edit="handleEditClick"
             />
         </div>
 
@@ -558,9 +606,11 @@ onMounted(fetchData);
         @cancel="modal.show = false"
     />
     <AddItemModal 
-        :show="showAddModal"
-        @close="showAddModal = false"
-        @add="handleAddManual"
+        :show="showAddModal" 
+        :initialData="editingItem"
+        @close="showAddModal = false; editingItem = null" 
+        @add="handleAddManual" 
+        @update="handleUpdateManual"
     />
     <ImportModal
         :show="showImportModal"
@@ -728,6 +778,65 @@ header {
     color: #ffd700;
 }
 
+.empty-state {
+    max-width: 500px;
+    margin: 4rem auto;
+    text-align: center;
+    padding: 3rem 2rem;
+}
+
+.empty-icon {
+    font-size: 4rem;
+    margin-bottom: 1.5rem;
+}
+
+.empty-state h2 {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.empty-state p {
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+}
+
+.empty-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.primary-btn {
+    background: var(--text-primary);
+    color: var(--bg-color);
+    border: none;
+    padding: 0.8rem 1.5rem;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.secondary-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.8rem 1.5rem;
+    border-radius: 12px;
+    cursor: pointer;
+}
+
+.top-sync-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: #ffd700;
+    margin-bottom: 1.5rem;
+    opacity: 0.8;
+}
+
 .grid-container {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -791,9 +900,18 @@ header {
 @media (max-width: 768px) {
     .summary-zone { grid-template-columns: 1fr; }
     header {
-        padding: 0.8rem 1rem; /* 與行動端 main padding 保持一致 */
+        padding: 0.8rem 1rem;
         margin-bottom: 1.5rem;
     }
     .grid-container { display: flex; flex-direction: column; }
+    .empty-actions { flex-direction: column; }
+    .mini-spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(255, 215, 0, 0.2);
+        border-top-color: #ffd700;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
 }
 </style>

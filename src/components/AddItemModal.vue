@@ -41,7 +41,9 @@
         </div>
         <div class="modal-footer">
           <button @click="emit('close')" class="modal-btn secondary">取消</button>
-          <button @click="submit" class="modal-btn primary" :disabled="!form.景點名稱">新增景點</button>
+          <button @click="submit" class="modal-btn primary" :disabled="!form.景點名稱">
+            {{ initialData ? '儲存修改' : '新增景點' }}
+          </button>
         </div>
       </div>
     </div>
@@ -51,8 +53,8 @@
 <script setup>
 import { ref, watch, nextTick } from 'vue';
 
-const props = defineProps(['show']);
-const emit = defineEmits(['close', 'add']);
+const props = defineProps(['show', 'initialData']);
+const emit = defineEmits(['close', 'add', 'update']);
 
 const initialFocus = ref(null);
 
@@ -118,15 +120,21 @@ const handleAutoFill = async () => {
 
 watch(() => props.show, (newVal) => {
   if (newVal) {
-    form.value = {
-        ID: Date.now().toString(),
-        "景點名稱": "",
-        "所在縣市": "",
-        "地址": "",
-        "建議停留": "",
-        "費用": "",
-        "介紹": ""
-    };
+    if (props.initialData) {
+      // 編輯模式：帶入現有資料
+      form.value = { ...props.initialData };
+    } else {
+      // 新增模式：重設表單
+      form.value = {
+          ID: Date.now().toString(),
+          "景點名稱": "",
+          "所在縣市": "",
+          "地址": "",
+          "建議停留": "",
+          "費用": "",
+          "介紹": ""
+      };
+    }
     nextTick(() => {
         initialFocus.value?.focus();
     });
@@ -134,7 +142,11 @@ watch(() => props.show, (newVal) => {
 });
 
 const submit = () => {
-    emit('add', { ...form.value });
+    if (props.initialData) {
+        emit('update', { ...form.value });
+    } else {
+        emit('add', { ...form.value });
+    }
 };
 </script>
 

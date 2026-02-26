@@ -1,6 +1,6 @@
 <script setup>
 const props = defineProps(['item']);
-const emit = defineEmits(['delete']);
+const emit = defineEmits(['delete', 'edit']);
 
 const getMapsLink = (item) => {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item['地址'] || item['景點名稱'])}`;
@@ -9,12 +9,17 @@ const getMapsLink = (item) => {
 const handleDelete = () => {
   emit('delete', props.item);
 };
+
+const handleEdit = () => {
+  emit('edit', props.item);
+};
 </script>
 
 <template>
   <div class="glass-card itinerary-card">
     <div class="card-actions">
         <div class="drag-handle" title="拖曳排序">⠿</div>
+        <button class="edit-item-btn" @click.stop="handleEdit" title="編輯此景點">✏️</button>
         <button class="delete-item-btn" @click.stop="handleDelete" title="刪除此景點">✕</button>
     </div>
     
@@ -58,7 +63,7 @@ const handleDelete = () => {
     z-index: 10;
 }
 
-.drag-handle, .delete-item-btn {
+.drag-handle, .delete-item-btn, .edit-item-btn {
     width: 32px;
     height: 32px;
     display: flex;
@@ -75,6 +80,11 @@ const handleDelete = () => {
     border-radius: 8px;
 }
 
+.edit-item-btn:hover {
+    background: rgba(129, 140, 248, 0.2);
+    color: #818cf8;
+}
+
 .drag-handle {
     cursor: grab;
     font-size: 1.2rem;
@@ -86,12 +96,14 @@ const handleDelete = () => {
 }
 
 .itinerary-card:hover .drag-handle,
-.itinerary-card:hover .delete-item-btn {
+.itinerary-card:hover .delete-item-btn,
+.itinerary-card:hover .edit-item-btn {
     opacity: 0.6;
 }
 
 .itinerary-card:hover .drag-handle:hover,
-.itinerary-card:hover .delete-item-btn:hover {
+.itinerary-card:hover .delete-item-btn:hover,
+.itinerary-card:hover .edit-item-btn:hover {
     opacity: 1;
 }
 
@@ -103,7 +115,7 @@ const handleDelete = () => {
     .glass-card {
         padding: 1.2rem;
     }
-    .drag-handle, .delete-item-btn {
+    .drag-handle, .delete-item-btn, .edit-item-btn {
         opacity: 0.6 !important;
     }
 }
