@@ -1,12 +1,11 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue';
+import { ref, onMounted, nextTick, watch } from 'vue';
 import Sortable from 'sortablejs';
 import ItineraryCard from './components/ItineraryCard.vue';
 import CustomModal from './components/CustomModal.vue';
 import AddItemModal from './components/AddItemModal.vue';
 import ImportModal from './components/ImportModal.vue';
 import PWAInstructions from './components/PWAInstructions.vue';
-
 
 // --- 配置區 ---
 const API_URL = import.meta.env.VITE_API_URL || ""; 
@@ -21,11 +20,13 @@ const showToast = ref(false);
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const isSyncing = ref(false);
+const regionalWeather = ref([]); // { city, temp, code, loading }
 let sortableInstance = null;
 
-import { watch } from 'vue';
+// 當切換分頁時，儲存名稱並更新氣象
 watch(currentSheet, (newVal) => {
     localStorage.setItem('last_sheet', newVal);
+    updateRegionalWeather();
 });
 
 // --- Modal 控制 ---
@@ -54,10 +55,60 @@ const handleModalConfirm = (val) => {
     modal.value.show = false;
 };
 
-const getUrl = (params) => {
-    const url = new URL(API_URL);
-    Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
-    return url.toString();
+// --- 通用地圖座標 ---
+const TW_GEO_MAP = {
+    "台北市": { lat: 25.0330, lon: 121.5654 },
+    "新北市": { lat: 25.0120, lon: 121.4657 },
+    "桃園市": { lat: 24.9936, lon: 121.3009 },
+    "台中市": { lat: 24.1477, lon: 120.6736 },
+    "台南市": { lat: 22.9997, lon: 120.2270 },
+    "高雄市": { lat: 22.6273, lon: 120.3014 },
+    "基隆市": { lat: 25.1284, lon: 121.7419 },
+    "新竹市": { lat: 24.8138, lon: 120.9674 },
+    "新竹縣": { lat: 24.8252, lon: 121.0124 },
+    "嘉義市": { lat: 23.4805, lon: 120.4491 },
+    "嘉義縣": { lat: 23.4518, lon: 120.2559 },
+    "苗栗縣": { lat: 24.5601, lon: 120.8209 },
+    "彰化縣": { lat: 24.0519, lon: 120.5161 },
+    "南投縣": { lat: 23.9037, lon: 120.6867 },
+    "雲林縣": { lat: 23.7092, lon: 120.4313 },
+    "屏東縣": { lat: 22.6659, lon: 120.4862 },
+    "宜蘭縣": { lat: 24.7570, lon: 121.7533 },
+    "花蓮縣": { lat: 23.9769, lon: 121.6044 },
+    "台東縣": { lat: 22.7584, lon: 121.1444 },
+    "澎湖縣": { lat: 23.5711, lon: 119.5793 },
+    "金門縣": { lat: 24.4367, lon: 118.3183 },
+    "連江縣": { lat: 26.1557, lon: 119.9513 }
+};
+
+// --- API 溝通相關 ---
+
+/**
+ * 核心同步函式：全面使用 POST + text/plain 以避開 CORS 問題
+ */
+const syncToGAS = async (payload) => {
+    if (!API_URL) {
+        triggerToast('請先設定 .env 檔案中的 VITE_API_URL', 'error');
+        return { success: false };
+    }
+    try {
+        const response = await fetch(API_URL, {
+            method: "POST",
+            mode: "cors",
+            redirect: "follow",
+            cache: "no-cache",
+            headers: {
+                "Content-Type": "text/plain",
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error('Network response was not ok');
+        return await response.json();
+    } catch (err) {
+        console.error("[Sync Error]", err);
+        return { success: false, error: "連線失敗，請檢查網路或 API 設定" };
+    }
 };
 
 const fetchData = async () => {
@@ -65,23 +116,9 @@ const fetchData = async () => {
 
     loading.value = true;
     try {
-        // 先獲取分頁清單，確保當前分頁是有效的
-        const sheetsRes = await fetch(getUrl({ action: 'getSheets' }));
-        const sheets = await sheetsRes.json();
+        // 先獲取分頁清單
+        const sheets = await syncToGAS({ action: 'getSheets' });
         
-        if (Array.isArray(sheets) && sheets.length > 0) {
-            allSheets.value = sheets;
-            // 如果當前 localStorage 存的分頁不在清單中，跳到第一個
-            if (!allSheets.value.includes(currentSheet.value)) {
-                currentSheet.value = allSheets.value[0];
-            }
-        }
-
-        // 接著讀取該分頁資料
-        const dataRes = await fetch(getUrl({ action: 'read', sheetName: currentSheet.value }));
-        const data = await dataRes.json();
-        
-        // 只有在真的是陣列且有長度時才更新，避免被錯誤物件蓋掉
         if (Array.isArray(sheets) && sheets.length > 0) {
             allSheets.value = sheets;
             // 如果當前選擇的頁籤不在清單中，自動跳到第一個有效頁籤
@@ -89,28 +126,128 @@ const fetchData = async () => {
                 currentSheet.value = allSheets.value[0];
             }
         }
-        
-        if (Array.isArray(data)) {
-            // 分離 Metadata 與 景點資料
-            const config = data.find(row => row.ID === "CONFIG");
-            if (config) {
-                metadata.value["基礎資訊"] = config["基礎資訊"] || "";
-                metadata.value["特別提醒"] = config["特別提醒"] || "";
+
+        // 接著讀取該分頁資料
+        if (currentSheet.value) {
+            const data = await syncToGAS({ 
+                action: 'read', 
+                sheetName: currentSheet.value 
+            });
+            
+            if (Array.isArray(data)) {
+                // 分離 Metadata 與 景點資料
+                const config = data.find(row => row.ID === "CONFIG");
+                if (config) {
+                    metadata.value["基礎資訊"] = config["基礎資訊"] || "";
+                    metadata.value["特別提醒"] = config["特別提醒"] || "";
+                } else {
+                    metadata.value = { "基礎資訊": "", "特別提醒": "" };
+                }
+                itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID);
             } else {
-                metadata.value = { "基礎資訊": "", "特別提醒": "" };
+                itineraryData.value = [];
             }
-            itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID); // 確保 ID 存在
-        } else {
-            console.error('Data format error from backend:', data);
-            itineraryData.value = [];
         }
     } catch (err) {
         console.error('Fetch error:', err);
-        triggerToast('雲端連線失敗，請檢查 API URL 或部署設定', 'error');
+        triggerToast('雲端連線失敗', 'error');
     } finally {
         loading.value = false;
-        nextTick(initSortable);
+        nextTick(() => {
+            initSortable();
+            updateRegionalWeather();
+        });
     }
+};
+
+const updateRegionalWeather = async () => {
+    const cities = new Set();
+    const TW_CITIES_SHORT = ["基隆", "台北", "新北", "桃園", "新竹", "苗栗", "台中", "彰化", "南投", "雲林", "嘉義", "台南", "高雄", "屏東", "宜蘭", "花蓮", "台東", "澎湖", "金門", "馬祖"];
+
+    // 寬鬆提取：從所有欄位中尋找縣市名稱 (包括使用者可能填錯的位址)
+    itineraryData.value.forEach(item => {
+        // 合併所有可能包含地名的文字
+        const allText = [
+            item['所在縣市'],
+            item['建議停留'],
+            item['地址'],
+            item['景點名稱']
+        ].join(' ');
+
+        TW_CITIES_SHORT.forEach(shortName => {
+            if (allText.includes(shortName)) {
+                // 標準化名稱
+                const isCity = ["台北", "新北", "桃園", "台中", "台南", "高雄", "新竹", "嘉義", "基隆"].includes(shortName);
+                cities.add(shortName + (isCity ? "市" : "縣"));
+            }
+        });
+    });
+
+    if (cities.size === 0) {
+        regionalWeather.value = [];
+        return;
+    }
+
+    // 初始化狀態
+    const newWeatherData = Array.from(cities).map(city => ({ city, loading: true }));
+    regionalWeather.value = newWeatherData;
+
+    newWeatherData.forEach(async (item, index) => {
+        try {
+            let latitude, longitude, cityName = item.city;
+
+            // 1. 優先查看靜態地圖
+            if (TW_GEO_MAP[item.city]) {
+                latitude = TW_GEO_MAP[item.city].lat;
+                longitude = TW_GEO_MAP[item.city].lon;
+            } else {
+                // 2. 查 Geocoding API
+                const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(item.city)}&count=1&language=zh&format=json`;
+                const res = await fetch(url);
+                const geoData = await res.json();
+                if (geoData.results && geoData.results.length > 0) {
+                    latitude = geoData.results[0].latitude;
+                    longitude = geoData.results[0].longitude;
+                    cityName = geoData.results[0].name;
+                }
+            }
+
+            if (latitude !== undefined) {
+                // 抓取當前氣象以及每小時預報（包含降雨機率）
+                const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&hourly=precipitation_probability&timezone=auto`);
+                const wData = await weatherRes.json();
+                
+                if (wData.current_weather) {
+                    // 取得當前小時的降雨機率
+                    const currentHourIdx = new Date().getHours();
+                    const rainProb = wData.hourly ? wData.hourly.precipitation_probability[currentHourIdx] : 0;
+
+                    regionalWeather.value[index] = {
+                        city: cityName,
+                        temp: Math.round(wData.current_weather.temperature),
+                        code: wData.current_weather.weathercode,
+                        rain: rainProb,
+                        loading: false
+                    };
+                }
+            }
+        } catch (err) {
+            console.error("[Weather Error]", err);
+            if (regionalWeather.value[index]) regionalWeather.value[index].loading = false;
+        }
+    });
+};
+
+const getWeatherIcon = (code) => {
+    if (code === 0) return '☀️';
+    if (code <= 3) return '🌤️';
+    if (code === 45 || code === 48) return '🌫️';
+    if (code >= 51 && code <= 55) return '🌦️';
+    if (code >= 61 && code <= 65) return '🌧️';
+    if (code >= 71 && code <= 77) return '❄️';
+    if (code >= 80 && code <= 82) return '🌦️';
+    if (code >= 95) return '⛈️';
+    return '🌡️';
 };
 
 const initSortable = () => {
@@ -134,153 +271,73 @@ const initSortable = () => {
 
 const handleSave = async (parsedData) => {
     showImportModal.value = false;
-    if (!API_URL) {
-        return triggerToast('請先設定 .env 檔案中的 VITE_API_URL', 'error');
-    }
-
-    let targetSheet = currentSheet.value;
-    const detectedName = parsedData.metadata.locationName;
+    loading.value = true;
     
-    // 定義真正的儲存邏輯
-    const executeSave = async (finalSheet) => {
-        loading.value = true;
-        try {
-            const response = await fetch(API_URL, {
-                method: "POST",
-                body: JSON.stringify({
-                    action: "write",
-                    sheetName: finalSheet,
-                    metadata: parsedData.metadata,
-                    data: parsedData.items
-                })
-            });
-            const result = await response.json();
-            if (result.success) {
-                triggerToast(result.message);
-                await fetchData();
-            }
-        } catch (err) {
-            triggerToast('同步失敗', 'error');
-        } finally {
-            loading.value = false;
-        }
-    };
+    const targetSheet = parsedData.metadata.locationName || currentSheet.value;
+    
+    const result = await syncToGAS({
+        action: "write",
+        sheetName: targetSheet,
+        metadata: parsedData.metadata,
+        data: parsedData.items
+    });
 
-    if (detectedName && detectedName !== currentSheet.value) {
-        if (currentSheet.value === "預設行程") {
-            openModal({
-                title: '智慧偵測',
-                message: `偵測到行程地點為「${detectedName}」，是否要以此名稱儲存？`,
-                type: 'confirm',
-                onConfirm: (ok) => {
-                    if (ok) {
-                        targetSheet = detectedName;
-                        if (!allSheets.value.includes(targetSheet)) allSheets.value.push(targetSheet);
-                        currentSheet.value = targetSheet;
-                    }
-                    executeSave(targetSheet);
-                }
-            });
-            return;
-        } 
-        else if (detectedName.includes(currentSheet.value) || currentSheet.value.includes(detectedName)) {
-            targetSheet = currentSheet.value;
-        }
-        else {
-            openModal({
-                title: '建立新分頁？',
-                message: `目前在「${currentSheet.value}」，但偵測到內容是「${detectedName}」，要建立新分頁儲存嗎？\n(取消則儲存至目前分頁)`,
-                type: 'confirm',
-                onConfirm: (createNew) => {
-                    if (createNew) {
-                        targetSheet = detectedName;
-                        if (!allSheets.value.includes(targetSheet)) allSheets.value.push(targetSheet);
-                        currentSheet.value = targetSheet;
-                    }
-                    executeSave(targetSheet);
-                }
-            });
-            return;
-        }
+    if (result.success) {
+        triggerToast('匯入成功');
+        currentSheet.value = targetSheet;
+        await fetchData();
+    } else {
+        triggerToast(result.error || '同步失敗', 'error');
     }
-
-    executeSave(targetSheet);
+    loading.value = false;
 };
 
 const handleAddManual = async (newItem) => {
     showAddModal.value = false;
     isSyncing.value = true;
+    
     // 樂觀更新 UI
     itineraryData.value.push(newItem);
     nextTick(initSortable);
 
-    try {
-        const response = await fetch(API_URL, {
-            method: "POST",
-            body: JSON.stringify({
-                action: "write",
-                sheetName: currentSheet.value,
-                data: [newItem],
-                metadata: metadata.value
-            })
-        });
-        const result = await response.json();
-        if (result.success) {
-            triggerToast('已新增一個景點');
-        } else {
-            triggerToast(result.error || '新增失敗', 'error');
-            await fetchData(); // 失敗時重新抓取
-        }
-    } catch (err) {
-        triggerToast('新增失敗', 'error');
+    const result = await syncToGAS({
+        action: "write",
+        sheetName: currentSheet.value,
+        data: [newItem],
+        metadata: metadata.value
+    });
+
+    if (result.success) {
+        triggerToast('已新增一個景點');
+        updateRegionalWeather();
+    } else {
+        triggerToast(result.error || '新增失敗', 'error');
         await fetchData();
-    } finally {
-        isSyncing.value = false;
     }
+    isSyncing.value = false;
 };
 
 const handleReorder = async (oldIdx, newIdx) => {
-    if (itineraryData.value.length === 0) return;
-    
     const items = [...itineraryData.value];
     const [movedItem] = items.splice(oldIdx, 1);
     items.splice(newIdx, 0, movedItem);
     itineraryData.value = items;
 
-    // 非阻塞同步
     isSyncing.value = true;
-    try {
-        const response = await fetch(API_URL, {
-            method: "POST",
-            mode: "cors",
-            headers: {
-                "Content-Type": "text/plain;charset=utf-8",
-            },
-            body: JSON.stringify({
-                action: "syncAll",
-                sheetName: currentSheet.value,
-                data: itineraryData.value,
-                metadata: metadata.value
-            })
-        });
-        const result = await response.json();
-        if (result.success) {
-            triggerToast('順序已保存');
-        } else {
-            triggerToast(result.error || '順序保存失敗', 'error');
-            // 只有在明確錯誤且需要恢復時才重新抓取
-            if (!result.error?.includes("拒絕同步")) {
-                await fetchData();
-            }
-        }
-    } catch (err) {
-        console.error("Sync failed:", err);
-        // 如果是網路錯誤，暫不強制重新抓取，以免清空 UI
-        triggerToast('排序同步中...', 'info'); 
-    } finally {
-        isSyncing.value = false;
-        nextTick(initSortable);
+    const result = await syncToGAS({
+        action: "syncAll",
+        sheetName: currentSheet.value,
+        data: itineraryData.value,
+        metadata: metadata.value
+    });
+
+    if (result.success) {
+        triggerToast('順序已保存');
+    } else {
+        triggerToast(result.error || '順序同步失敗', 'error');
+        await fetchData();
     }
+    isSyncing.value = false;
 };
 
 const renameLocation = () => {
@@ -292,28 +349,19 @@ const renameLocation = () => {
         onConfirm: async (newName) => {
             if (!newName || newName === currentSheet.value) return;
             loading.value = true;
-            try {
-                const response = await fetch(API_URL, {
-                    method: "POST",
-                    body: JSON.stringify({
-                        action: "renameSheet",
-                        sheetName: currentSheet.value,
-                        newName: newName
-                    })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    triggerToast(result.message);
-                    currentSheet.value = newName;
-                    await fetchData();
-                } else {
-                    triggerToast(result.error, 'error');
-                }
-            } catch (err) {
-                triggerToast('重新命名失敗', 'error');
-            } finally {
-                loading.value = false;
+            const result = await syncToGAS({
+                action: "renameSheet",
+                sheetName: currentSheet.value,
+                newName: newName
+            });
+
+            if (result.success) {
+                currentSheet.value = newName;
+                await fetchData();
+            } else {
+                triggerToast(result.error || '命名失敗', 'error');
             }
+            loading.value = false;
         }
     });
 };
@@ -324,30 +372,20 @@ const deleteLocation = () => {
     }
     openModal({
         title: '確認刪除',
-        message: `確定要刪除「${currentSheet.value}」嗎？此動作不可撤銷！`,
+        message: `確定要刪除「${currentSheet.value}」嗎？`,
         type: 'confirm',
         onConfirm: async (ok) => {
             if (!ok) return;
             loading.value = true;
-            try {
-                const response = await fetch(API_URL, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "deleteSheet", sheetName: currentSheet.value })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    triggerToast(result.message);
-                    const remainingSheets = allSheets.value.filter(s => s !== currentSheet.value);
-                    currentSheet.value = remainingSheets[0];
-                    await fetchData();
-                } else {
-                    triggerToast(result.error || '刪除失敗', 'error');
-                }
-            } catch (err) {
-                triggerToast('刪除失敗', 'error');
-            } finally {
-                loading.value = false;
+            const result = await syncToGAS({ action: "deleteSheet", sheetName: currentSheet.value });
+            if (result.success) {
+                const remainingSheets = allSheets.value.filter(s => s !== currentSheet.value);
+                currentSheet.value = remainingSheets[0];
+                await fetchData();
+            } else {
+                triggerToast(result.error || '刪除失敗', 'error');
             }
+            loading.value = false;
         }
     });
 };
@@ -407,13 +445,28 @@ onMounted(fetchData);
                 <button class="tab-btn add-tab" @click="addLocation">+</button>
             </div>
         </nav>
+        
+        <div v-if="regionalWeather.length > 0" class="weather-summary-bar">
+            <div v-for="w in regionalWeather" :key="w.city" class="weather-card-mini glass-card">
+                <template v-if="!w.loading">
+                    <div class="w-compact">
+                        <span class="w-city-name">{{ w.city }}</span>
+                        <span class="w-icon-mini">{{ getWeatherIcon(w.code) }}</span>
+                        <span class="w-temp-mini">{{ w.temp }}°</span>
+                        <span class="w-details-mini">💧{{ w.rain }}%</span>
+                    </div>
+                </template>
+                <div v-else class="weather-loading-mini">
+                    <div class="mini-spinner"></div>
+                </div>
+            </div>
+        </div>
     </header>
 
     <main>
         <div v-if="itineraryData.length === 0 && !loading" class="empty-state">
             <h2>🏖️ 目前尚無行程資料</h2>
-            <p v-if="API_URL === 'YOUR_GAS_API_URL'">請先在 App.vue 中設定您的 GAS API URL</p>
-            <p v-else>請點擊上方 📥 按鈕匯入資料，或用 ➕ 手動新增卡片。</p>
+            <p>請點擊上方 📥 按鈕匯入資料，或用 ➕ 手動新增卡片。</p>
         </div>
 
         <div v-else class="grid-container">
@@ -424,7 +477,6 @@ onMounted(fetchData);
             />
         </div>
 
-        <!-- 基礎資訊與提醒移動至卡片下方 -->
         <section v-if="metadata['基礎資訊'] || metadata['特別提醒']" class="summary-zone">
             <div v-if="metadata['基礎資訊']" class="glass-card summary-card">
                 <h3>📋 基礎資訊</h3>
@@ -439,19 +491,15 @@ onMounted(fetchData);
         <PWAInstructions />
     </main>
 
-
-    <!-- Loading Overlay -->
     <div v-if="loading" class="loading-overlay">
         <div class="spinner"></div>
         <p>正在同步雲端資料...</p>
     </div>
 
-    <!-- Notification Toast -->
     <transition name="fade">
         <div v-if="showToast" class="toast">{{ toastMsg }}</div>
     </transition>
 
-    <!-- Custom Modal -->
     <CustomModal 
         :show="modal.show"
         :title="modal.title"
@@ -461,13 +509,11 @@ onMounted(fetchData);
         @confirm="handleModalConfirm"
         @cancel="modal.show = false"
     />
-    <!-- Add Item Modal -->
     <AddItemModal 
         :show="showAddModal"
         @close="showAddModal = false"
         @add="handleAddManual"
     />
-    <!-- Import Modal -->
     <ImportModal
         :show="showImportModal"
         :loading="loading"
@@ -484,15 +530,8 @@ header {
     background: rgba(15, 17, 21, 0.95);
     backdrop-filter: blur(16px);
     margin-bottom: 2rem;
-    padding: 1rem 1.5rem;
+    padding: 1rem 2rem; /* 與 main padding 保持一致 */
     border-bottom: 1px solid var(--border-color);
-}
-
-@media (max-width: 768px) {
-    header {
-        padding: 0.8rem 1rem;
-        margin-bottom: 1.5rem;
-    }
 }
 
 .header-main {
@@ -514,39 +553,17 @@ header {
     padding: 0.3rem 0.6rem;
     cursor: pointer;
     font-size: 0.9rem;
-    transition: all 0.2s;
-}
-
-.icon-btn:hover {
-    background: rgba(255,255,255,0.15);
-    transform: scale(1.05);
-}
-
-.delete-btn:hover {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: #ef4444;
 }
 
 .logo {
     font-size: 1.5rem;
     font-weight: 700;
-    letter-spacing: -0.05em;
     background: linear-gradient(90deg, #fff, #94a3b8);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
-.sync-status {
-    font-size: 0.8rem;
-    color: var(--accent-color);
-    margin-right: 0.5rem;
-    display: flex;
-    align-items: center;
-    font-weight: 500;
-    opacity: 0.8;
-}
-
-nav.tab-nav {
+.tab-nav {
     width: 100%;
 }
 
@@ -555,11 +572,12 @@ nav.tab-nav {
     gap: 0.6rem;
     overflow-x: auto;
     padding-bottom: 0.5rem;
-    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
 }
 
 .nav-scroll::-webkit-scrollbar {
-    display: none;
+    display: none; /* Chrome/Safari */
 }
 
 .tab-btn {
@@ -568,8 +586,6 @@ nav.tab-nav {
     color: var(--text-secondary);
     padding: 0.5rem 1.25rem;
     border-radius: 99px;
-    cursor: pointer;
-    transition: all 0.3s ease;
     white-space: nowrap;
 }
 
@@ -579,49 +595,90 @@ nav.tab-nav {
     border-color: var(--text-primary);
 }
 
-.summary-zone {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.5rem;
-    margin-bottom: 3rem;
+.weather-summary-bar {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
 }
 
-.summary-card {
-    padding: 1.5rem;
-    font-size: 0.95rem;
+.weather-summary-bar::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
 }
 
-.summary-card h3 {
-    margin-bottom: 1rem;
+.weather-card-mini {
+    flex: 0 0 auto;
+    padding: 0.4rem 0.8rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: 99px; /* 改為橢圓形更精簡 */
+}
+
+.w-compact {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.w-icon-mini {
     font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+}
+
+.w-temp-mini {
+    font-size: 1rem;
+    font-weight: 700;
     color: var(--text-primary);
 }
 
-.alert-card {
-    border-color: rgba(99, 102, 241, 0.3);
+.w-city-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
 }
 
-.pre-wrap {
-    white-space: pre-wrap;
-    color: var(--text-secondary);
-    line-height: 1.8;
+.w-details-mini {
+    font-size: 0.8rem;
+    color: var(--accent-color);
+    font-weight: 500;
+}
+
+.weather-loading-mini {
+    height: 24px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 .grid-container {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 1.5rem;
-    align-items: start;
 }
 
-.empty-state {
-    text-align: center;
-    padding: 5rem 2rem;
+.summary-zone {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 2rem;
 }
 
-.empty-state h2 {
-    color: var(--text-secondary);
-    margin-bottom: 1rem;
+.glass-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    padding: 1.5rem;
+}
+
+.pre-wrap {
+    white-space: pre-wrap;
+    line-height: 1.8;
 }
 
 .loading-overlay {
@@ -653,53 +710,18 @@ nav.tab-nav {
     position: fixed;
     bottom: 2rem;
     right: 2rem;
-    background: var(--success);
-    color: #fff;
+    background: var(--text-primary);
+    color: var(--bg-color);
     padding: 1rem 2rem;
     border-radius: 8px;
-    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5);
-    z-index: 1001;
-}
-
-.fade-enter-active, .fade-leave-active {
-    transition: opacity 0.5s;
-}
-.fade-enter-from, .fade-leave-to {
-    opacity: 0;
 }
 
 @media (max-width: 768px) {
-    .header-main {
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
-    }
-    .logo { font-size: 1.4rem; }
-    
-    .nav-scroll {
-        padding: 0 0.5rem 0.5rem;
-        gap: 0.5rem;
-    }
-
-    .summary-zone { 
-        grid-template-columns: 1fr; 
-        margin-top: 1.5rem;
+    .summary-zone { grid-template-columns: 1fr; }
+    header {
+        padding: 0.8rem 1rem; /* 與行動端 main padding 保持一致 */
         margin-bottom: 1.5rem;
     }
-    .grid-container { 
-        display: flex;
-        flex-direction: column;
-        gap: 1.5rem;
-        width: 100%;
-        padding: 0;
-    }
-    .toast { left: 1rem; right: 1rem; bottom: 1rem; text-align: center; }
-}
-
-.sortable-ghost {
-    opacity: 0.3;
-    transform: scale(0.95);
-    border: 2px dashed var(--accent-color) !important;
+    .grid-container { display: flex; flex-direction: column; }
 }
 </style>

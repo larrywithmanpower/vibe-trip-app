@@ -15,6 +15,8 @@
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js').then(reg => {
             console.log('[SW] Registered', reg);
+            // 強制檢查更新
+            reg.update();
           }).catch(err => {
             console.log('[SW] Registration failed', err);
           });

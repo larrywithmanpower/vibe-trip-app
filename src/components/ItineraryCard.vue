@@ -13,6 +13,7 @@ const getMapsLink = (item) => {
     <h4>{{ item['景點名稱'] || '未命名景點' }}</h4>
     
     <div class="meta">
+      <p v-if="item['所在縣市']">🏛️ {{ item['所在縣市'] }}</p>
       <p>📍 {{ item['建議停留'] || '未提供時數' }}</p>
       <p>💰 {{ item['費用'] || '免費或未註明' }}</p>
     </div>

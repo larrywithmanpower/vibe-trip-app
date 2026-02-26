@@ -14,6 +14,10 @@
             <label>地址 / Google 地圖連結</label>
             <input v-model="form.地址" placeholder="輸入地址或貼上地圖連結">
           </div>
+          <div class="form-group">
+            <label>所在縣市 (必填，影響天氣顯示)</label>
+            <input v-model="form.所在縣市" placeholder="例如：雲林縣">
+          </div>
           <div class="group-row">
             <div class="form-group">
               <label>建議停留</label>
@@ -49,6 +53,7 @@ const initialFocus = ref(null);
 const form = ref({
     ID: Date.now().toString(), // 暫時用時間戳當 ID
     "景點名稱": "",
+    "所在縣市": "",
     "地址": "",
     "建議停留": "",
     "費用": "",
@@ -60,6 +65,7 @@ watch(() => props.show, (newVal) => {
     form.value = {
         ID: Date.now().toString(),
         "景點名稱": "",
+        "所在縣市": "",
         "地址": "",
         "建議停留": "",
         "費用": "",
