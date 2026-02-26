@@ -9,8 +9,9 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // 絕對不要攔截 Google Apps Script
-  if (e.request.url.includes('google.com')) {
+  // 絕對不要攔截 Google 或 氣象 API
+  const url = e.request.url;
+  if (url.includes('google.com') || url.includes('open-meteo.com')) {
     return;
   }
   

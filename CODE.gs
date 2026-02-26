@@ -145,10 +145,53 @@ function handleAllActions(params) {
     return createResponse({ success: true, message: "刪除成功" });
   }
 
+  if (action === "searchPlaces") {
+    return createResponse(searchPlaces(params.query));
+  }
+
   return createResponse({ error: "Invalid action: " + action });
 }
 
 function createResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * 使用 Google Maps 內建服務搜尋地點（用於智能填入）
+ */
+function searchPlaces(query) {
+  try {
+    if (!query) return { success: false, message: "Missing query" };
+    
+    // 強制加上「台灣」關鍵字提升精準度
+    const fullQuery = query.includes("台灣") ? query : "台灣 " + query;
+    const results = Maps.newGeocoder().geocode(fullQuery);
+    
+    if (results.status === 'OK' && results.results.length > 0) {
+      const res = results.results[0];
+      
+      // 提取縣市 (通常在 address_components 裡)
+      let city = "";
+      for (const comp of res.address_components) {
+        if (comp.types.includes("administrative_area_level_1") || comp.types.includes("locality")) {
+          // 處理像「雲林縣」或「台北市」
+          city = comp.long_name;
+          break;
+        }
+      }
+      
+      return {
+        success: true,
+        name: res.formatted_address,
+        address: res.formatted_address,
+        city: city,
+        lat: res.geometry.location.lat,
+        lng: res.geometry.location.lng
+      };
+    }
+    return { success: false, message: 'Google 找不到相關位置資料' };
+  } catch (e) {
+    return { success: false, message: "Google 搜尋發生錯誤: " + e.toString() };
+  }
 }
