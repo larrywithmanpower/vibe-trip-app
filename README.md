@@ -1,78 +1,63 @@
-# VibeTrip | 通用型旅遊規劃器 (Vue 3 + GAS)
+# 🏝️ VibeTrip | 智慧旅遊規劃精靈 使用說明
 
-VibeTrip 是一款專為「懶人」設計的旅遊規劃工具。它結合了 Google Sheets 的強大資料處理能力與 Vue 3 的現代化介面，支援自動初始化標題列，讓你只需貼上 JSON 資料即可快速建立精美的旅遊行程。
+歡迎來到 VibeTrip！這是一份協助您快速上手並將 App 安裝到手機上的指南。
 
-## 🚀 核心功能
-
-- **✨ 自動初始化**：初次建立地點（工作表）時，系統會自動在第一行補全欄位標題。
-- **📊 響應式佈局**：支援桌面與手機端，提供極簡且現代的深色模式視圖。
-- **🔌 JSON 快速匯入**：支援從 AI 生成器或其他來源複製的 JSON 資料一鍵同步至雲端。
-- **🗺️ 地圖聯動**：點擊地址自動跳轉至 Google Maps 導航。
-- **🔄 動態分頁**：自由建立多個旅遊地點，資料讀取不報錯。
-
-## 🛠️ 技術棧
-
-- **Frontend**: Vue 3 (Composition API), Vite, Vanilla CSS
-- **Backend**: Google Apps Script (GAS)
-- **Database**: Google Sheets
-
-## 📝 欄位定義 (自動生成)
-
-系統預設會初始化以下欄位：
-`["ID", "景點名稱", "照片URL", "地址", "交通停車", "建議停留", "費用", "介紹"]`
-
-## ⚙️ 快速上手
-
-### 1. 後端部署 (GAS)
-1. 建立一個新的 Google 試算表。
-2. 點擊「延伸功能」 > 「Apps Script」。
-3. 貼入專案中的 `CODE.gs` 內容。
-4. 點擊「部署」 > 「新部署」。
-5. 類型選擇「網頁應用程式」，並將權限設為「任何人 (Anyone)」。
-6. 複製生成的 **Web App URL**。
-
-### 2. 前端設定
-1. 在 `/src/App.vue` 中尋找 `const API_URL = "YOUR_GAS_API_URL";`。
-2. 將其替換為你剛才複製的 GAS 網址。
-
-### 3. 本地運行
-```bash
-# 安裝依賴
-npm install
-
-# 啟動開發環境
-npm run dev
-
-# 構建生產版資料
-npm run build
-```
-
-## 🌐 GitHub Pages 部署
-
-本專案已設定自動化部署流程：
-1. **GitHub Actions**：推送到 `main` 分支後會自動觸發 `.github/workflows/deploy.yml`。
-2. **Settings 設定**：
-   - 進入 GitHub 專案的 `Settings` > `Pages`。
-   - `Build and deployment` > `Source` 選擇 `Deploy from a branch`。
-   - `Branch` 選擇 `gh-pages` 分支，資料夾選擇 `/(root)`。
-3. **存取權限**：確保您在專案的 `Settings` > `Actions` > `General` 中，將 `Workflow permissions` 設為 `Read and write permissions`。
-
-
-## 📂 檔案結構
-
-```text
-├── src/
-│   ├── components/
-│   │   ├── ItineraryCard.vue  # 行程顯示組件
-│   │   └── ImportZone.vue     # 資料匯入組件
-│   ├── App.vue                # 主程式與邏輯
-│   ├── main.js                # 入口點
-│   └── style.css              # 全域樣式
-├── index.html                 # HTML 模板
-├── CODE.gs                    # GAS 後端程式碼
-└── README.md                  # 專案文件
-```
+## 🌐 線上存取
+**[正式版網址](https://larrywithmanpower.github.io/vibe-trip-app/)**
 
 ---
 
-*Made with ❤️ for travelers.*
+## 📲 安裝至手機主畫面 (PWA)
+
+為了獲得最佳體驗（全螢幕、離線讀取、秒開），強烈建議將 VibeTrip 安裝到手機桌面：
+
+### **iOS (Safari)**
+1. 使用 Safari 開啟網址。
+2. 點擊瀏覽器底部的 **「分享」** 按鈕 (方框加箭頭圖示)。
+3. 向下滑動找到並點擊 **「加入主畫面」**。
+4. 點擊右上角的 **「新增」**。
+
+### **Android (Chrome)**
+1. 使用 Chrome 開啟網址。
+2. 點擊右上角的 **「更多選項」** (三個點圖示)。
+3. 選擇 **「安裝應用程式」** 或 **「新增至主畫面」**。
+4. 根據提示點擊 **「安裝」**。
+
+---
+
+## 🎮 基本操作教學
+
+### **1. 建立與切換行程**
+- **切換分頁**：點擊頂部的分頁標籤（如「行程 1」）即可切換不同地點。
+- **重新命名**：點擊上方 ✏️ 按鈕可修改目前的行程名稱。
+- **新增分頁**：在分頁列最右側點擊 **「+」** 即可建立新行程。
+
+### **2. 管理景點卡片**
+- **新增景點**：點擊上方 ➕ 按鈕，輸入名稱後可以使用 **「✨ 智能填入」** 自動抓取地址。
+- **編輯資料**：滑鼠移至卡片（或手機點擊卡片）會出現 **✏️ 編輯按鈕**。
+- **刪除景點**：點擊卡片右上角的 **✕** 並確認即可刪除。
+- **排序景點**：長按卡片上的 **⠿** 圖示即可上下拖曳更換順序。
+
+### **3. 查看氣象與資訊**
+- **氣象預報**：App 會自動辨識您編排的縣市，並在最上方顯示未來一週的氣溫與降雨機率。
+- **基礎資訊**：頁面最下方會顯示該行程的備註與特別提醒事項。
+
+---
+
+## 🚀 進階技巧
+
+- **離線可用**：一旦開啟過 App，即便在飛機上或網路不穩的地方，您依然可以讀取已緩存的行程。
+- **自動同步**：所有的修改都會在背景自動與您的 Google Sheets 同步，無需手動存檔。
+- **地圖導航**：點擊卡片上的地址，會自動開啟 Google Maps 進行導航。
+
+---
+
+## �️ 開發與部署 (給開發者)
+
+如果您需要自行部署，請參考以下步驟：
+1. 準備 Google Sheets 並安裝 `CODE.gs`。
+2. 部署為 Web App 並取得 URL。
+3. 在專案中設定 `.env` 的 `VITE_API_URL`。
+4. 執行 `npm run build` 並部署至 GitHub Pages。
+
+*Made with ❤️ for smart travelers.*

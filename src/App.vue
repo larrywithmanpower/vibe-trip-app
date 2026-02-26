@@ -5,7 +5,7 @@ import ItineraryCard from './components/ItineraryCard.vue';
 import CustomModal from './components/CustomModal.vue';
 import AddItemModal from './components/AddItemModal.vue';
 import ImportModal from './components/ImportModal.vue';
-import PWAInstructions from './components/PWAInstructions.vue';
+import UserGuideModal from './components/UserGuideModal.vue';
 
 // --- 配置區 ---
 const API_URL = import.meta.env.VITE_API_URL || ""; 
@@ -25,6 +25,7 @@ const toastMsg = ref('');
 const showToast = ref(false);
 const showAddModal = ref(false);
 const showImportModal = ref(false);
+const showUserGuide = ref(false);
 const regionalWeather = ref([]); 
 let sortableInstance = null;
 
@@ -124,7 +125,6 @@ const saveLocal = () => {
 const fetchData = async () => {
     if (!API_URL) return;
 
-    // 嘗試從分頁特定的快取中讀取
     const sheetCacheKey = `data_cache_${currentSheet.value}`;
     const cachedData = localStorage.getItem(sheetCacheKey);
     if (cachedData) {
@@ -132,32 +132,40 @@ const fetchData = async () => {
     }
 
     const hasData = itineraryData.value.length > 0;
+    // 只有在完全沒資料且沒快取時才顯示全螢幕載入，避免黑頻感
     if (!hasData) loading.value = true;
     isFetching.value = true;
 
     try {
-        const [sheets, data] = await Promise.all([
+        const [sheetsResult, dataResult] = await Promise.allSettled([
             syncToGAS({ action: 'getSheets' }),
             syncToGAS({ action: 'read', sheetName: currentSheet.value })
         ]);
         
-        if (Array.isArray(sheets)) {
+        // 1. 處理分頁清單
+        if (sheetsResult.status === 'fulfilled' && Array.isArray(sheetsResult.value)) {
+            const sheets = sheetsResult.value;
             allSheets.value = sheets;
             localStorage.setItem('allSheets', JSON.stringify(sheets));
+            
+            // 修正：如果目前的 currentSheet 不在清單中，自動切換至第一個
+            if (!sheets.includes(currentSheet.value) && sheets.length > 0) {
+                currentSheet.value = sheets[0];
+                // 切換後重新抓取該分頁資料
+                const newData = await syncToGAS({ action: 'read', sheetName: currentSheet.value });
+                if (Array.isArray(newData)) {
+                    processIncomingData(newData);
+                }
+            }
         }
 
-        if (Array.isArray(data)) {
-            const config = data.find(row => row.ID === "CONFIG");
-            metadata.value = config ? { "基礎資訊": config["基礎資訊"] || "", "特別提醒": config["特別提醒"] || "" } : { "基礎資訊": "", "特別提醒": "" };
-            
-            itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID);
-            
-            // 更新特定分頁快取與全域快取
-            saveLocal();
+        // 2. 處理當前分頁資料
+        if (dataResult.status === 'fulfilled' && Array.isArray(dataResult.value)) {
+            processIncomingData(dataResult.value);
         }
     } catch (err) {
         console.error('Fetch error:', err);
-        if (!hasData) triggerToast('雲端連線失敗', 'error');
+        if (!hasData) triggerToast('雲端連線失敗，請檢查網路', 'error');
     } finally {
         loading.value = false;
         isFetching.value = false;
@@ -166,6 +174,13 @@ const fetchData = async () => {
             updateRegionalWeather();
         });
     }
+};
+
+const processIncomingData = (data) => {
+    const config = data.find(row => row.ID === "CONFIG");
+    metadata.value = config ? { "基礎資訊": config["基礎資訊"] || "", "特別提醒": config["特別提醒"] || "" } : { "基礎資訊": "", "特別提醒": "" };
+    itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID);
+    saveLocal();
 };
 
 const updateRegionalWeather = async () => {
@@ -508,6 +523,7 @@ onMounted(fetchData);
                 </div>
             </div>
             <div class="active-tab-controls">
+                <button @click="showUserGuide = true" class="icon-btn" title="查看使用教學">❓</button>
                 <button @click="showImportModal = true" class="icon-btn" title="匯入資料">📥</button>
                 <button @click="showAddModal = true" class="icon-btn" title="手動新增">➕</button>
                 <button @click="renameLocation" class="icon-btn" title="重新命名分頁">✏️</button>
@@ -583,8 +599,6 @@ onMounted(fetchData);
                 <div class="pre-wrap">{{ metadata['特別提醒'] }}</div>
             </div>
         </section>
-
-        <PWAInstructions />
     </main>
 
     <div v-if="loading" class="loading-overlay">
@@ -596,6 +610,10 @@ onMounted(fetchData);
         <div v-if="showToast" class="toast">{{ toastMsg }}</div>
     </transition>
 
+    <UserGuideModal 
+        :show="showUserGuide" 
+        @close="showUserGuide = false" 
+    />
     <CustomModal 
         :show="modal.show"
         :title="modal.title"
@@ -865,12 +883,13 @@ header {
 .loading-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.8);
+    background: rgba(15, 23, 42, 0.7);
+    backdrop-filter: blur(12px);
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    z-index: 1000;
+    z-index: 3000;
 }
 
 .spinner {
