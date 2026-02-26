@@ -323,6 +323,40 @@ const handleAddManual = async (newItem) => {
     isSyncing.value = false;
 };
 
+const handleDeleteItem = (targetItem) => {
+    openModal({
+        title: '確認刪除景點',
+        message: `確定要從行程中刪除「${targetItem['景點名稱']}」嗎？`,
+        type: 'confirm',
+        onConfirm: async (ok) => {
+            if (!ok) return;
+            
+            isSyncing.value = true;
+            // 樂觀更新 UI 與快取
+            itineraryData.value = itineraryData.value.filter(item => item !== targetItem);
+            localStorage.setItem(`data_cache_${currentSheet.value}`, JSON.stringify(itineraryData.value));
+            localStorage.setItem('data_cache', JSON.stringify(itineraryData.value));
+
+            // 同步到雲端 (使用 syncAll 覆寫當前分頁)
+            const result = await syncToGAS({
+                action: "syncAll",
+                sheetName: currentSheet.value,
+                data: itineraryData.value,
+                metadata: metadata.value
+            });
+
+            if (result.success) {
+                triggerToast('景點已刪除');
+                updateRegionalWeather();
+            } else {
+                triggerToast(result.error || '同步失敗', 'error');
+                await fetchData(); // 失敗時回滾
+            }
+            isSyncing.value = false;
+        }
+    });
+};
+
 const handleReorder = async (oldIdx, newIdx) => {
     const items = [...itineraryData.value];
     const [movedItem] = items.splice(oldIdx, 1);
@@ -487,6 +521,7 @@ onMounted(fetchData);
                 v-for="(item, idx) in itineraryData" 
                 :key="item.ID || idx" 
                 :item="item" 
+                @delete="handleDeleteItem"
             />
         </div>
 

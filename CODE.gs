@@ -100,10 +100,6 @@ function handleAllActions(params) {
     const itineraries = params.data || [];
     const lastRow = sheet.getLastRow();
     
-    if (itineraries.length === 0 && lastRow > 2) {
-       return createResponse({ error: "拒絕同步空資料集" });
-    }
-
     const allRowsToSync = [];
     const metadata = params.metadata || {};
     allRowsToSync.push([
@@ -118,14 +114,17 @@ function handleAllActions(params) {
       }));
     });
     
+    // 清除舊資料 (從第 2 行開始清到最後)
     if (lastRow > 1) {
       sheet.getRange(2, 1, lastRow, HEADERS.length).clearContent();
     }
+    
+    // 寫入新資料
     if (allRowsToSync.length > 0) {
       sheet.getRange(2, 1, allRowsToSync.length, HEADERS.length).setValues(allRowsToSync);
     }
     SpreadsheetApp.flush();
-    return createResponse({ success: true, message: "順序已同步" });
+    return createResponse({ success: true, message: "同步成功" });
   }
 
   if (action === "renameSheet") {

@@ -1,14 +1,22 @@
 <script setup>
-defineProps(['item']);
+const props = defineProps(['item']);
+const emit = defineEmits(['delete']);
 
 const getMapsLink = (item) => {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item['地址'] || item['景點名稱'])}`;
+};
+
+const handleDelete = () => {
+  emit('delete', props.item);
 };
 </script>
 
 <template>
   <div class="glass-card itinerary-card">
-    <div class="drag-handle" title="拖曳排序">⠿</div>
+    <div class="card-actions">
+        <div class="drag-handle" title="拖曳排序">⠿</div>
+        <button class="delete-item-btn" @click.stop="handleDelete" title="刪除此景點">✕</button>
+    </div>
     
     <h4>{{ item['景點名稱'] || '未命名景點' }}</h4>
     
@@ -41,29 +49,50 @@ const getMapsLink = (item) => {
     position: relative; /* 為了讓 drag-handle 定位 */
 }
 
-.drag-handle {
+.card-actions {
     position: absolute;
     top: 0.8rem;
     right: 0.8rem;
+    display: flex;
+    gap: 0.5rem;
+    z-index: 10;
+}
+
+.drag-handle, .delete-item-btn {
     width: 32px;
     height: 32px;
     display: flex;
     justify-content: center;
     align-items: center;
     color: var(--text-secondary);
-    cursor: grab;
-    font-size: 1.2rem;
-    opacity: 0.5;
-    transition: all 0.2s;
+    cursor: pointer;
+    font-size: 1rem;
+    opacity: 0; /* 預設隱藏，hover 才顯示 */
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     user-select: none;
-    z-index: 10;
     background: rgba(255,255,255,0.05);
-    border-radius: 6px;
+    border: none;
+    border-radius: 8px;
 }
 
-.itinerary-card:hover .drag-handle {
+.drag-handle {
+    cursor: grab;
+    font-size: 1.2rem;
+}
+
+.delete-item-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.itinerary-card:hover .drag-handle,
+.itinerary-card:hover .delete-item-btn {
+    opacity: 0.6;
+}
+
+.itinerary-card:hover .drag-handle:hover,
+.itinerary-card:hover .delete-item-btn:hover {
     opacity: 1;
-    background: rgba(255,255,255,0.1);
 }
 
 .drag-handle:active {
@@ -73,6 +102,9 @@ const getMapsLink = (item) => {
 @media (max-width: 768px) {
     .glass-card {
         padding: 1.2rem;
+    }
+    .drag-handle, .delete-item-btn {
+        opacity: 0.6 !important;
     }
 }
 
