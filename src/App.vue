@@ -137,31 +137,26 @@ const fetchData = async () => {
     isFetching.value = true;
 
     try {
-        const [sheetsResult, dataResult] = await Promise.allSettled([
-            syncToGAS({ action: 'getSheets' }),
-            syncToGAS({ action: 'read', sheetName: currentSheet.value })
-        ]);
+        // 1. 先抓取分頁清單，確保知道最新的分頁架構
+        const sheetsResult = await syncToGAS({ action: 'getSheets' });
         
-        // 1. 處理分頁清單
-        if (sheetsResult.status === 'fulfilled' && Array.isArray(sheetsResult.value)) {
-            const sheets = sheetsResult.value;
-            allSheets.value = sheets;
-            localStorage.setItem('allSheets', JSON.stringify(sheets));
+        if (Array.isArray(sheetsResult)) {
+            allSheets.value = sheetsResult;
+            localStorage.setItem('allSheets', JSON.stringify(sheetsResult));
             
             // 修正：如果目前的 currentSheet 不在清單中，自動切換至第一個
-            if (!sheets.includes(currentSheet.value) && sheets.length > 0) {
-                currentSheet.value = sheets[0];
-                // 切換後重新抓取該分頁資料
-                const newData = await syncToGAS({ action: 'read', sheetName: currentSheet.value });
-                if (Array.isArray(newData)) {
-                    processIncomingData(newData);
-                }
+            if (!sheetsResult.includes(currentSheet.value) && sheetsResult.length > 0) {
+                console.log(`[Startup] Switching from "${currentSheet.value}" to "${sheetsResult[0]}"`);
+                currentSheet.value = sheetsResult[0];
+                // 注意：currentSheet 改變會觸發 watch，但我們這裡直接執行讀取以確保順序
             }
         }
 
-        // 2. 處理當前分頁資料
-        if (dataResult.status === 'fulfilled' && Array.isArray(dataResult.value)) {
-            processIncomingData(dataResult.value);
+        // 2. 抓取「最終正確」的分頁資料
+        const dataResult = await syncToGAS({ action: 'read', sheetName: currentSheet.value });
+        
+        if (Array.isArray(dataResult)) {
+            processIncomingData(dataResult);
         }
     } catch (err) {
         console.error('Fetch error:', err);
