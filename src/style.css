@@ -67,7 +67,22 @@
 
 /* ---------- 2. 基礎重置與版面 ---------- */
 html {
+  font-size: 16px;
   -webkit-text-size-adjust: 100%;
+}
+
+/* 小螢幕整體降一級根字級, 所有 rem 尺寸（字級 / 間距 / 按鈕）等比縮小,
+   版面比例不會跑掉。iPhone 13 mini 為 375pt, 落在第一段 */
+@media (max-width: 400px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 350px) {
+  html {
+    font-size: 14px;
+  }
 }
 
 body {

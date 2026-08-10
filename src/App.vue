@@ -1259,8 +1259,10 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     gap: 0.55rem;
-    max-width: min(90vw, 420px);
-    padding: 0.75rem 1.15rem;
+    /* 明確以內容寬度為準, 短訊息保證單行, 長訊息才在上限內折行 */
+    width: max-content;
+    max-width: min(92vw, 420px);
+    padding: 0.7rem 1.1rem;
     border-radius: var(--r-full);
     background: var(--surface-modal);
     border: 1px solid var(--border-strong);
