@@ -603,23 +603,25 @@ onUnmounted(() => {
 </script>
 
 <template>
+    <!-- 讀取指示：頁面最上緣的細光條，動態在邊緣且為橫向，不會搶走視線 -->
+    <transition name="bar-fade">
+        <div v-if="isFetching || isSyncing" class="load-bar"></div>
+    </transition>
+
     <header class="app-header">
         <div class="header-row">
             <div class="brand">
                 <span class="brand-mark"><BaseIcon name="compass" :size="20" /></span>
                 <span class="brand-text">
                     <span class="brand-name">VibeTrip</span>
-                    <span class="brand-sub">
-                        <template v-if="syncLabel">
-                            <span class="spinner-mini"></span>{{ syncLabel }}
-                        </template>
-                        <template v-else>{{ itineraryData.length }} 個景點</template>
+                    <span class="brand-sub" :class="{ busy: syncLabel }">
+                        {{ syncLabel || `${itineraryData.length} 個景點` }}
                     </span>
                 </span>
             </div>
 
             <div class="header-actions">
-                <button class="act" :class="{ spinning: isFetching }" @click="manualRefresh" title="重新讀取雲端資料" aria-label="重新整理">
+                <button class="act" :class="{ busy: isFetching }" :disabled="isFetching" @click="manualRefresh" title="重新讀取雲端資料" aria-label="重新整理">
                     <BaseIcon name="refresh" />
                 </button>
                 <button class="act" @click="showImportModal = true" title="匯入資料" aria-label="匯入資料">
@@ -817,10 +819,14 @@ onUnmounted(() => {
 .brand-sub {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
     height: 15px;
     font-size: 0.72rem;
     color: var(--text-3);
+    transition: color 0.25s var(--ease);
+}
+
+.brand-sub.busy {
+    color: var(--brand);
 }
 
 .header-actions {
@@ -872,13 +878,54 @@ onUnmounted(() => {
     transform: scale(0.95);
 }
 
-/* 刷新圖示是 180 度旋轉對稱, 轉一圈視覺上等於兩次循環, 週期要拉長才不會顯得慌張 */
-.act.spinning {
+/* 讀取中的刷新鈕維持靜止, 只變色並停用, 動態交給頂部光條 */
+.act.busy {
     color: var(--brand);
 }
 
-.act.spinning .ico {
-    animation: spin 1.8s linear infinite;
+.act:disabled {
+    cursor: default;
+}
+
+/* ---------- 頂部讀取光條 ---------- */
+.load-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 200;
+    overflow: hidden;
+    background: rgba(99, 102, 241, 0.22);
+}
+
+.load-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--brand), transparent);
+    animation: load-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes load-slide {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(350%);
+    }
+}
+
+.bar-fade-enter-active,
+.bar-fade-leave-active {
+    transition: opacity 0.3s var(--ease);
+}
+
+.bar-fade-enter-from,
+.bar-fade-leave-to {
+    opacity: 0;
 }
 
 /* 更多選單 */

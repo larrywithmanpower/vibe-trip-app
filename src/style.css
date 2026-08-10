@@ -398,8 +398,12 @@ button {
     animation: rm-pulse 1.6s ease-in-out infinite !important;
   }
 
-  .act.spinning .ico {
+  /* 光條改為整條靜態顯示, 不滑動 */
+  .load-bar::after {
     animation: none !important;
+    width: 100% !important;
+    background: var(--brand) !important;
+    opacity: 0.6;
   }
 }
 
