@@ -674,12 +674,6 @@ onUnmounted(() => {
     </header>
 
     <main>
-        <!-- 背景同步中的弱提示 (如果已有資料) -->
-        <div v-if="isFetching && itineraryData.length > 0" class="sync-hint">
-            <span class="spinner-mini"></span>
-            正在檢查雲端更新…
-        </div>
-
         <div v-if="initialLoading" class="timeline skeleton-list">
             <div v-for="n in 3" :key="n" class="sk-station">
                 <span class="sk-dot"></span>
@@ -878,8 +872,13 @@ onUnmounted(() => {
     transform: scale(0.95);
 }
 
+/* 刷新圖示是 180 度旋轉對稱, 轉一圈視覺上等於兩次循環, 週期要拉長才不會顯得慌張 */
+.act.spinning {
+    color: var(--brand);
+}
+
 .act.spinning .ico {
-    animation: spin 0.9s linear infinite;
+    animation: spin 1.8s linear infinite;
 }
 
 /* 更多選單 */
@@ -1024,16 +1023,6 @@ onUnmounted(() => {
 }
 
 /* ---------- 主體 ---------- */
-.sync-hint {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-    font-size: 0.78rem;
-    color: var(--text-3);
-    margin-bottom: 1.1rem;
-}
-
 .timeline {
     display: flex;
     flex-direction: column;
