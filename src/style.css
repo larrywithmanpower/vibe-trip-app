@@ -387,7 +387,29 @@ button {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* 讀取指示器是 infinite 迴圈, 套上 0.01ms 會變成高速閃爍而不是「不動」,
+     必須明確排除。轉動改為低頻淡入淡出, 保留「正在忙」的訊號 */
+  .spinner,
+  .spinner-mini {
+    animation: rm-pulse 1.6s ease-in-out infinite !important;
+  }
+
+  .act.spinning .ico {
+    animation: none !important;
+  }
+}
+
+@keyframes rm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
   }
 }
 
