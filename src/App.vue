@@ -1,14 +1,15 @@
 <script setup>
-import { ref, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import Sortable from 'sortablejs';
 import ItineraryCard from './components/ItineraryCard.vue';
 import CustomModal from './components/CustomModal.vue';
 import AddItemModal from './components/AddItemModal.vue';
 import ImportModal from './components/ImportModal.vue';
 import UserGuideModal from './components/UserGuideModal.vue';
+import BaseIcon from './components/BaseIcon.vue';
 
 // --- 配置區 ---
-const API_URL = import.meta.env.VITE_API_URL || ""; 
+const API_URL = import.meta.env.VITE_API_URL || "";
 
 // --- 狀態定義 ---
 const currentSheet = ref(localStorage.getItem('currentSheet') || '行程 1');
@@ -17,17 +18,20 @@ const itineraryData = ref(JSON.parse(localStorage.getItem(`data_cache_${currentS
 const metadata = ref(JSON.parse(localStorage.getItem('metadata') || '{}'));
 
 const editingItem = ref(null);
-const loading = ref(false); // 控制全螢幕載入 (僅在完全沒資料時使用)
+const loading = ref(false); // 控制全螢幕載入 (匯入 / 改名 / 刪除等阻塞操作)
+const initialLoading = ref(false); // 首次載入且無快取時顯示骨架屏
 const isFetching = ref(false); // 控制背景同步狀態
 const isSyncing = ref(false); // 控制存檔中狀態
 
-const toastMsg = ref('');
-const showToast = ref(false);
+const toast = ref({ show: false, msg: '', type: 'success' });
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const showUserGuide = ref(false);
-const regionalWeather = ref([]); 
+const menuOpen = ref(false);
+const regionalWeather = ref([]);
 let sortableInstance = null;
+let toastTimer = null;
+let lastFetchAt = 0;
 
 // 當切換分頁時，儲存名稱並更新氣象
 watch(currentSheet, (newVal) => {
@@ -60,6 +64,14 @@ const handleModalConfirm = (val) => {
     if (modal.value.onConfirm) modal.value.onConfirm(val);
     modal.value.show = false;
 };
+
+// --- 更多選單 ---
+const runFromMenu = (fn) => {
+    menuOpen.value = false;
+    fn();
+};
+
+const closeMenu = () => { menuOpen.value = false; };
 
 // --- 通用地圖座標 ---
 const TW_GEO_MAP = {
@@ -94,7 +106,7 @@ const TW_GEO_MAP = {
  */
 const syncToGAS = async (payload) => {
     if (!API_URL) {
-        triggerToast('請先設定 .env 檔案中的 VITE_API_URL', 'error');
+        triggerToast('尚未連結雲端，請設定 .env 的 VITE_API_URL', 'error');
         return { success: false };
     }
     try {
@@ -108,7 +120,7 @@ const syncToGAS = async (payload) => {
             },
             body: JSON.stringify(payload)
         });
-        
+
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
     } catch (err) {
@@ -122,56 +134,105 @@ const saveLocal = () => {
     localStorage.setItem('metadata', JSON.stringify(metadata.value));
 };
 
-const fetchData = async () => {
-    if (!API_URL) return;
+const saveSheets = () => {
+    localStorage.setItem('allSheets', JSON.stringify(allSheets.value));
+};
 
+const afterDataReady = () => {
+    nextTick(() => {
+        initSortable();
+        updateRegionalWeather();
+    });
+};
+
+const fetchData = async () => {
     const sheetCacheKey = `data_cache_${currentSheet.value}`;
     const cachedData = localStorage.getItem(sheetCacheKey);
     if (cachedData) {
         itineraryData.value = JSON.parse(cachedData);
     }
 
+    // 未設定後端時只跑本機初始化，別讓拖曳排序與氣象一起停擺
+    if (!API_URL) {
+        afterDataReady();
+        return;
+    }
+
     const hasData = itineraryData.value.length > 0;
-    // 只有在完全沒資料且沒快取時才顯示全螢幕載入，避免黑頻感
-    if (!hasData) loading.value = true;
+    // 沒有快取可先墊檔時才顯示骨架屏，有快取就直接看舊資料、背景更新
+    if (!hasData) initialLoading.value = true;
     isFetching.value = true;
 
     try {
-        // 1. 先抓取分頁清單，確保知道最新的分頁架構
-        const sheetsResult = await syncToGAS({ action: 'getSheets' });
-        
+        // getSheets 與 read 彼此不相依，平行送可省掉一整趟 GAS 延遲（約 1.6 秒）
+        const [sheetsResult, dataResult] = await Promise.all([
+            syncToGAS({ action: 'getSheets' }),
+            syncToGAS({ action: 'read', sheetName: currentSheet.value })
+        ]);
+
+        let finalData = dataResult;
+
         if (Array.isArray(sheetsResult)) {
             allSheets.value = sheetsResult;
-            localStorage.setItem('allSheets', JSON.stringify(sheetsResult));
-            
-            // 修正：如果目前的 currentSheet 不在清單中，自動切換至第一個
+            saveSheets();
+
+            // 目前分頁在雲端已不存在時，才需要補讀第一個分頁
             if (!sheetsResult.includes(currentSheet.value) && sheetsResult.length > 0) {
                 console.log(`[Startup] Switching from "${currentSheet.value}" to "${sheetsResult[0]}"`);
                 currentSheet.value = sheetsResult[0];
-                // 注意：currentSheet 改變會觸發 watch，但我們這裡直接執行讀取以確保順序
+                finalData = await syncToGAS({ action: 'read', sheetName: currentSheet.value });
             }
         }
 
-        // 2. 抓取「最終正確」的分頁資料
-        const dataResult = await syncToGAS({ action: 'read', sheetName: currentSheet.value });
-        
-        if (Array.isArray(dataResult)) {
-            processIncomingData(dataResult);
+        if (Array.isArray(finalData)) {
+            processIncomingData(finalData);
         }
     } catch (err) {
         console.error('Fetch error:', err);
         if (!hasData) triggerToast('雲端連線失敗，請檢查網路', 'error');
     } finally {
-        loading.value = false;
+        initialLoading.value = false;
         isFetching.value = false;
-        nextTick(() => {
-            initSortable();
-            updateRegionalWeather();
-        });
+        afterDataReady();
     }
 };
 
+/**
+ * 只重讀單一分頁：切換分頁與手動刷新都用這支，省掉 getSheets 那趟
+ */
+const reloadSheet = async (sheetName) => {
+    if (!API_URL) {
+        afterDataReady();
+        return;
+    }
+    isFetching.value = true;
+    try {
+        const dataResult = await syncToGAS({ action: 'read', sheetName });
+        // 期間使用者又切走了就不要蓋掉畫面
+        if (sheetName !== currentSheet.value) return;
+        if (Array.isArray(dataResult)) processIncomingData(dataResult);
+    } finally {
+        isFetching.value = false;
+        afterDataReady();
+    }
+};
+
+const manualRefresh = async () => {
+    if (isFetching.value || !API_URL) return;
+    await reloadSheet(currentSheet.value);
+    triggerToast('已重新讀取雲端資料');
+};
+
+// 從背景切回前景時自動重抓，避免長時間停留在舊資料
+const handleVisibility = () => {
+    if (document.visibilityState !== 'visible') return;
+    if (Date.now() - lastFetchAt < 30000) return;
+    lastFetchAt = Date.now();
+    reloadSheet(currentSheet.value);
+};
+
 const processIncomingData = (data) => {
+    lastFetchAt = Date.now();
     const config = data.find(row => row.ID === "CONFIG");
     metadata.value = config ? { "基礎資訊": config["基礎資訊"] || "", "特別提醒": config["特別提醒"] || "" } : { "基礎資訊": "", "特別提醒": "" };
     itineraryData.value = data.filter(row => row.ID !== "CONFIG" && row.ID);
@@ -234,7 +295,7 @@ const updateRegionalWeather = async () => {
                 // 抓取當前氣象以及每小時預報（包含降雨機率）
                 const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&hourly=precipitation_probability&timezone=auto`);
                 const wData = await weatherRes.json();
-                
+
                 if (wData.current_weather) {
                     // 取得當前小時的降雨機率
                     const currentHourIdx = new Date().getHours();
@@ -269,17 +330,23 @@ const getWeatherIcon = (code) => {
 };
 
 const initSortable = () => {
-    const el = document.querySelector('.grid-container');
+    const el = document.querySelector('.timeline');
     if (!el) return;
-    
+
     if (sortableInstance) {
         sortableInstance.destroy();
     }
 
     sortableInstance = new Sortable(el, {
-        animation: 300,
+        animation: 250,
         handle: '.drag-handle',
         ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        dragClass: 'sortable-drag',
+        // 手機長按才啟動拖曳，避免與頁面捲動打架
+        delay: 180,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 5,
         onEnd: (evt) => {
             if (evt.oldIndex === evt.newIndex) return;
             handleReorder(evt.oldIndex, evt.newIndex);
@@ -290,9 +357,9 @@ const initSortable = () => {
 const handleSave = async (parsedData) => {
     showImportModal.value = false;
     loading.value = true;
-    
+
     const targetSheet = parsedData.metadata.locationName || currentSheet.value;
-    
+
     const result = await syncToGAS({
         action: "write",
         sheetName: targetSheet,
@@ -313,7 +380,7 @@ const handleSave = async (parsedData) => {
 const handleAddManual = async (newItem) => {
     isSyncing.value = true;
     showAddModal.value = false;
-    
+
     // 樂觀更新
     itineraryData.value.push(newItem);
     saveLocal();
@@ -365,6 +432,11 @@ const handleUpdateManual = async (updatedItem) => {
     isSyncing.value = false;
 };
 
+const openAddModal = () => {
+    editingItem.value = null;
+    showAddModal.value = true;
+};
+
 const handleEditClick = (item) => {
     editingItem.value = item;
     showAddModal.value = true;
@@ -377,7 +449,7 @@ const handleDeleteItem = (targetItem) => {
         type: 'confirm',
         onConfirm: async (ok) => {
             if (!ok) return;
-            
+
             isSyncing.value = true;
             // 樂觀更新 UI 與快取
             itineraryData.value = itineraryData.value.filter(item => item !== targetItem);
@@ -429,7 +501,7 @@ const handleReorder = async (oldIdx, newIdx) => {
 
 const renameLocation = () => {
     openModal({
-        title: '重新命名',
+        title: '重新命名行程',
         message: `請輸入「${currentSheet.value}」的新名稱:`,
         type: 'prompt',
         initialValue: currentSheet.value,
@@ -455,11 +527,11 @@ const renameLocation = () => {
 
 const deleteLocation = () => {
     if (allSheets.value.length <= 1) {
-        return triggerToast('不能刪除最後一個分頁', 'error');
+        return triggerToast('不能刪除最後一個行程', 'error');
     }
     openModal({
-        title: '確認刪除',
-        message: `確定要刪除「${currentSheet.value}」嗎？`,
+        title: '確認刪除行程',
+        message: `確定要刪除「${currentSheet.value}」嗎？此行程的所有景點都會一併消失。`,
         type: 'confirm',
         onConfirm: async (ok) => {
             if (!ok) return;
@@ -467,6 +539,8 @@ const deleteLocation = () => {
             const result = await syncToGAS({ action: "deleteSheet", sheetName: currentSheet.value });
             if (result.success) {
                 const remainingSheets = allSheets.value.filter(s => s !== currentSheet.value);
+                allSheets.value = remainingSheets;
+                saveSheets();
                 currentSheet.value = remainingSheets[0];
                 await fetchData();
             } else {
@@ -479,12 +553,13 @@ const deleteLocation = () => {
 
 const addLocation = () => {
     openModal({
-        title: '新增行程地點',
-        message: '請輸入地點名稱:',
+        title: '新增行程',
+        message: '請輸入行程名稱:',
         type: 'prompt',
         onConfirm: (name) => {
             if (name && !allSheets.value.includes(name)) {
                 allSheets.value.push(name);
+                saveSheets();
                 currentSheet.value = name;
                 itineraryData.value = [];
                 saveLocal();
@@ -494,122 +569,182 @@ const addLocation = () => {
 };
 
 const switchTab = (sheet) => {
+    if (sheet === currentSheet.value) return;
     currentSheet.value = sheet;
-    fetchData();
+    // 先用快取墊檔，畫面立刻換頁，雲端資料回來再覆蓋
+    const cached = localStorage.getItem(`data_cache_${sheet}`);
+    itineraryData.value = cached ? JSON.parse(cached) : [];
+    reloadSheet(sheet);
 };
 
 const triggerToast = (msg, type = 'success') => {
-    toastMsg.value = msg;
-    showToast.value = true;
-    setTimeout(() => showToast.value = false, 3000);
+    toast.value = { show: true, msg, type };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.value.show = false; }, 3000);
 };
 
-onMounted(fetchData);
+const syncLabel = computed(() => {
+    if (isFetching.value) return '同步中';
+    if (isSyncing.value) return '存檔中';
+    return '';
+});
+
+onMounted(() => {
+    document.addEventListener('click', closeMenu);
+    document.addEventListener('visibilitychange', handleVisibility);
+    fetchData();
+});
+
+onUnmounted(() => {
+    document.removeEventListener('click', closeMenu);
+    document.removeEventListener('visibilitychange', handleVisibility);
+    clearTimeout(toastTimer);
+});
 </script>
 
 <template>
-    <header>
-        <div class="header-main">
-            <div class="brand-area">
-                <div class="logo">VibeTrip</div>
-                <div class="sync-status-container">
-                    <span v-if="isFetching" class="sync-status fetching">📡 同步中...</span>
-                    <span v-else-if="isSyncing" class="sync-status">💾 存檔中...</span>
-                </div>
+    <header class="app-header">
+        <div class="header-row">
+            <div class="brand">
+                <span class="brand-mark"><BaseIcon name="compass" :size="20" /></span>
+                <span class="brand-text">
+                    <span class="brand-name">VibeTrip</span>
+                    <span class="brand-sub">
+                        <template v-if="syncLabel">
+                            <span class="spinner-mini"></span>{{ syncLabel }}
+                        </template>
+                        <template v-else>{{ itineraryData.length }} 個景點</template>
+                    </span>
+                </span>
             </div>
-            <div class="active-tab-controls">
-                <button @click="showUserGuide = true" class="icon-btn" title="查看使用教學">❓</button>
-                <button @click="showImportModal = true" class="icon-btn" title="匯入資料">📥</button>
-                <button @click="showAddModal = true" class="icon-btn" title="手動新增">➕</button>
-                <button @click="renameLocation" class="icon-btn" title="重新命名分頁">✏️</button>
-                <button @click="deleteLocation" class="icon-btn delete-btn" title="刪除分頁">🗑️</button>
+
+            <div class="header-actions">
+                <button class="act" :class="{ spinning: isFetching }" @click="manualRefresh" title="重新讀取雲端資料" aria-label="重新整理">
+                    <BaseIcon name="refresh" />
+                </button>
+                <button class="act" @click="showImportModal = true" title="匯入資料" aria-label="匯入資料">
+                    <BaseIcon name="download" />
+                </button>
+                <button class="act act-primary" @click="openAddModal" title="新增景點">
+                    <BaseIcon name="plus" />
+                    <span class="act-label">新增景點</span>
+                </button>
+                <div class="menu-wrap" @click.stop>
+                    <button class="act" :class="{ open: menuOpen }" @click="menuOpen = !menuOpen" title="更多" aria-label="更多操作">
+                        <BaseIcon name="more" />
+                    </button>
+                    <transition name="menu-pop">
+                        <div v-if="menuOpen" class="menu">
+                            <button @click="runFromMenu(renameLocation)"><BaseIcon name="pencil" :size="16" />重新命名行程</button>
+                            <button @click="runFromMenu(() => showUserGuide = true)"><BaseIcon name="book" :size="16" />使用教學</button>
+                            <div class="menu-sep"></div>
+                            <button class="danger" @click="runFromMenu(deleteLocation)"><BaseIcon name="trash" :size="16" />刪除此行程</button>
+                        </div>
+                    </transition>
+                </div>
             </div>
         </div>
-        <nav class="tab-nav">
-            <div class="nav-scroll">
-                <button 
-                    v-for="sheet in allSheets" 
-                    :key="sheet"
-                    class="tab-btn"
-                    :class="{ active: currentSheet === sheet }"
-                    @click="switchTab(sheet)"
-                >
-                    {{ sheet }}
-                </button>
-                <button class="tab-btn add-tab" @click="addLocation">+</button>
-            </div>
+
+        <nav class="tabs u-scroll-x">
+            <button
+                v-for="sheet in allSheets"
+                :key="sheet"
+                class="tab"
+                :class="{ active: currentSheet === sheet }"
+                @click="switchTab(sheet)"
+            >
+                {{ sheet }}
+            </button>
+            <button class="tab tab-add" @click="addLocation" title="新增行程">
+                <BaseIcon name="plus" :size="15" />
+            </button>
         </nav>
-        
-        <div v-if="regionalWeather.length > 0" class="weather-summary-bar">
-            <div v-for="w in regionalWeather" :key="w.city" class="weather-card-mini glass-card">
+
+        <div v-if="regionalWeather.length > 0" class="weather-bar u-scroll-x">
+            <div v-for="w in regionalWeather" :key="w.city" class="weather-pill">
                 <template v-if="!w.loading">
-                    <div class="w-compact">
-                        <span class="w-city-name">{{ w.city }}</span>
-                        <span class="w-icon-mini">{{ getWeatherIcon(w.code) }}</span>
-                        <span class="w-temp-mini">{{ w.temp }}°</span>
-                        <span class="w-details-mini">💧{{ w.rain }}%</span>
-                    </div>
+                    <span class="w-city">{{ w.city }}</span>
+                    <span class="w-icon">{{ getWeatherIcon(w.code) }}</span>
+                    <span class="w-temp">{{ w.temp }}°</span>
+                    <span class="w-rain">💧{{ w.rain }}%</span>
                 </template>
-                <div v-else class="weather-loading-mini">
-                    <div class="mini-spinner"></div>
-                </div>
+                <span v-else class="spinner-mini"></span>
             </div>
         </div>
     </header>
 
     <main>
         <!-- 背景同步中的弱提示 (如果已有資料) -->
-        <div v-if="isFetching && itineraryData.length > 0" class="top-sync-indicator">
-            <div class="mini-spinner"></div>
-            正在檢查雲端更新...
+        <div v-if="isFetching && itineraryData.length > 0" class="sync-hint">
+            <span class="spinner-mini"></span>
+            正在檢查雲端更新…
         </div>
 
-        <div v-if="itineraryData.length === 0 && !loading" class="empty-state glass-card">
-            <div class="empty-icon">🏝️</div>
-            <h2>尚未發現行程資料</h2>
-            <p>目前此分頁是空的，您可以從 Google Sheets 手動新增資料，或是點擊上方「➕」開始規劃第一筆行程！</p>
-            <div class="empty-actions">
-                <button @click="showAddModal = true" class="primary-btn">➕ 新增第一個景點</button>
-                <button @click="fetchData" class="secondary-btn">🔄 重新整理</button>
+        <div v-if="initialLoading" class="timeline skeleton-list">
+            <div v-for="n in 3" :key="n" class="sk-station">
+                <span class="sk-dot"></span>
+                <div class="sk-card">
+                    <span class="sk-line w60"></span>
+                    <span class="sk-chips"></span>
+                    <span class="sk-line w100"></span>
+                    <span class="sk-line w80"></span>
+                </div>
             </div>
         </div>
 
-        <div v-else class="grid-container">
-            <ItineraryCard 
-                v-for="(item, idx) in itineraryData" 
-                :key="item.ID || idx" 
-                :item="item" 
+        <section v-else-if="itineraryData.length === 0 && !loading" class="empty">
+            <span class="empty-icon"><BaseIcon name="island" :size="30" /></span>
+            <h2>這趟行程還是一張白紙</h2>
+            <p>加入第一個想去的地方，VibeTrip 會自動幫你抓地址、排順序，還會盯著當地天氣。</p>
+            <div class="empty-actions">
+                <button @click="openAddModal" class="btn btn-primary"><BaseIcon name="plus" :size="17" />新增第一個景點</button>
+                <button @click="showImportModal = true" class="btn btn-ghost"><BaseIcon name="download" :size="17" />貼上表格匯入</button>
+            </div>
+            <p v-if="!API_URL" class="empty-warn">
+                <BaseIcon name="alert" :size="15" />尚未連結 Google Sheets：缺少 <code>VITE_API_URL</code> 設定
+            </p>
+        </section>
+
+        <div v-else class="timeline">
+            <ItineraryCard
+                v-for="(item, idx) in itineraryData"
+                :key="item.ID || idx"
+                :item="item"
+                :index="idx + 1"
                 @delete="handleDeleteItem"
                 @edit="handleEditClick"
             />
         </div>
 
-        <section v-if="metadata['基礎資訊'] || metadata['特別提醒']" class="summary-zone">
-            <div v-if="metadata['基礎資訊']" class="glass-card summary-card">
-                <h3>📋 基礎資訊</h3>
-                <div class="pre-wrap">{{ metadata['基礎資訊'] }}</div>
+        <section v-if="metadata['基礎資訊'] || metadata['特別提醒']" class="notes">
+            <div v-if="metadata['基礎資訊']" class="note-card">
+                <h3><BaseIcon name="note" :size="17" />基礎資訊</h3>
+                <div class="u-prewrap">{{ metadata['基礎資訊'] }}</div>
             </div>
-            <div v-if="metadata['特別提醒']" class="glass-card summary-card alert-card">
-                <h3>💡 特別提醒</h3>
-                <div class="pre-wrap">{{ metadata['特別提醒'] }}</div>
+            <div v-if="metadata['特別提醒']" class="note-card note-warn">
+                <h3><BaseIcon name="bulb" :size="17" />特別提醒</h3>
+                <div class="u-prewrap">{{ metadata['特別提醒'] }}</div>
             </div>
         </section>
     </main>
 
     <div v-if="loading" class="loading-overlay">
         <div class="spinner"></div>
-        <p>正在同步雲端資料...</p>
+        <p>正在同步雲端資料…</p>
     </div>
 
-    <transition name="fade">
-        <div v-if="showToast" class="toast">{{ toastMsg }}</div>
+    <transition name="toast-slide">
+        <div v-if="toast.show" class="toast" :class="toast.type">
+            <BaseIcon :name="toast.type === 'error' ? 'alert' : 'check'" :size="17" />
+            {{ toast.msg }}
+        </div>
     </transition>
 
-    <UserGuideModal 
-        :show="showUserGuide" 
-        @close="showUserGuide = false" 
+    <UserGuideModal
+        :show="showUserGuide"
+        @close="showUserGuide = false"
     />
-    <CustomModal 
+    <CustomModal
         :show="modal.show"
         :title="modal.title"
         :message="modal.message"
@@ -618,11 +753,11 @@ onMounted(fetchData);
         @confirm="handleModalConfirm"
         @cancel="modal.show = false"
     />
-    <AddItemModal 
-        :show="showAddModal" 
+    <AddItemModal
+        :show="showAddModal"
         :initialData="editingItem"
-        @close="showAddModal = false; editingItem = null" 
-        @add="handleAddManual" 
+        @close="showAddModal = false; editingItem = null"
+        @add="handleAddManual"
         @update="handleUpdateManual"
     />
     <ImportModal
@@ -634,298 +769,519 @@ onMounted(fetchData);
 </template>
 
 <style>
-header {
+/* ---------- 頁首 ---------- */
+.app-header {
     position: sticky;
     top: 0;
-    z-index: 1000;
-    background: rgba(15, 17, 21, 0.95);
-    backdrop-filter: blur(16px);
-    margin-bottom: 2rem;
-    padding: 1rem 2rem; /* 與 main padding 保持一致 */
-    border-bottom: 1px solid var(--border-color);
+    z-index: 100;
+    margin: 0 -1.25rem 1.6rem;
+    padding: calc(env(safe-area-inset-top, 0px) + 0.9rem) 1.25rem 0.7rem;
+    background: var(--bg-header);
+    backdrop-filter: blur(20px) saturate(160%);
+    border-bottom: 1px solid var(--border);
 }
 
-.brand-area {
+.header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.9rem;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.brand-mark {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--r-md);
+    background: linear-gradient(140deg, var(--brand-fill), #8b5cf6);
+    color: #fff;
+    box-shadow: 0 6px 16px -8px var(--brand-fill);
+}
+
+.brand-text {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    min-width: 0;
 }
 
-.sync-status-container {
-    height: 14px; /* 固定高度防止跳動 */
-    margin-top: -2px;
-}
-
-.sync-status {
-    font-size: 0.65rem;
-    color: var(--accent-color);
-    opacity: 0.7;
-    font-weight: 500;
-}
-
-.header-main {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start; /* 改為向上對齊 */
-    margin-bottom: 1.5rem;
-}
-
-.active-tab-controls {
-    display: flex;
-    gap: 0.6rem;
-}
-
-.icon-btn {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 0.3rem 0.6rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-}
-
-.logo {
-    font-size: 1.5rem;
+.brand-name {
+    font-size: 1.12rem;
     font-weight: 700;
-    background: linear-gradient(90deg, #fff, #94a3b8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
 }
 
-.tab-nav {
+.brand-sub {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    height: 15px;
+    font-size: 0.72rem;
+    color: var(--text-3);
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    height: 38px;
+    min-width: 38px;
+    padding: 0 0.65rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-2);
+    transition: background 0.2s var(--ease), color 0.2s var(--ease),
+        border-color 0.2s var(--ease);
+}
+
+.act:hover,
+.act.open {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+    color: var(--text-1);
+}
+
+.act-primary {
+    background: var(--brand-fill);
+    border-color: transparent;
+    color: #fff;
+    padding: 0 0.95rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    box-shadow: 0 6px 18px -10px var(--brand-fill);
+}
+
+.act-primary:hover {
+    background: #6a71f5;
+    border-color: transparent;
+    color: #fff;
+}
+
+.act:active {
+    transform: scale(0.95);
+}
+
+.act.spinning .ico {
+    animation: spin 0.9s linear infinite;
+}
+
+/* 更多選單 */
+.menu-wrap {
+    position: relative;
+}
+
+.menu {
+    position: absolute;
+    top: calc(100% + 0.45rem);
+    right: 0;
+    z-index: 120;
+    min-width: 190px;
+    padding: 0.35rem;
+    background: var(--surface-modal);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-2);
+}
+
+.menu button {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.6rem 0.7rem;
+    border-radius: var(--r-sm);
+    font-size: 0.88rem;
+    color: var(--text-1);
+    text-align: left;
+}
+
+.menu button:hover {
+    background: var(--surface-2);
+}
+
+.menu button.danger {
+    color: var(--danger);
+}
+
+.menu button.danger:hover {
+    background: var(--danger-soft);
+}
+
+.menu-sep {
+    height: 1px;
+    margin: 0.3rem 0.2rem;
+    background: var(--border);
+}
+
+.menu-pop-enter-active,
+.menu-pop-leave-active {
+    transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
+    transform-origin: top right;
+}
+
+.menu-pop-enter-from,
+.menu-pop-leave-to {
+    opacity: 0;
+    transform: scale(0.94) translateY(-4px);
+}
+
+/* 行程分頁 */
+.tabs {
+    display: flex;
+    gap: 0.45rem;
+    padding-bottom: 0.15rem;
+}
+
+.tab {
+    flex: 0 0 auto;
+    padding: 0.42rem 1rem;
+    border-radius: var(--r-full);
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-2);
+    font-size: 0.86rem;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: all 0.2s var(--ease);
+}
+
+.tab:hover {
+    color: var(--text-1);
+    border-color: var(--border-strong);
+}
+
+.tab.active {
+    background: var(--brand-fill);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+}
+
+.tab-add {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    padding: 0;
+    border-style: dashed;
+    color: var(--text-3);
+}
+
+/* 氣象列 */
+.weather-bar {
+    display: flex;
+    gap: 0.45rem;
+    margin-top: 0.7rem;
+    padding-bottom: 0.15rem;
+}
+
+.weather-pill {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--r-full);
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    white-space: nowrap;
+}
+
+.w-city {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.w-icon {
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+.w-temp {
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.w-rain {
+    font-size: 0.75rem;
+    color: var(--text-2);
+}
+
+/* ---------- 主體 ---------- */
+.sync-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    font-size: 0.78rem;
+    color: var(--text-3);
+    margin-bottom: 1.1rem;
+}
+
+.timeline {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 骨架屏：首次載入時先撐出版面，比空白轉圈有感 */
+.sk-station {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.9rem;
+}
+
+.sk-dot {
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    margin-top: 0.55rem;
+    border-radius: 50%;
+    background: var(--surface-2);
+}
+
+.sk-card {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 1rem;
+    padding: 1.15rem 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface-1);
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.sk-line,
+.sk-chips {
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 25%,
+        rgba(255, 255, 255, 0.11) 37%,
+        rgba(255, 255, 255, 0.05) 63%
+    );
+    background-size: 400% 100%;
+    animation: sk-shimmer 1.4s ease infinite;
+}
+
+.sk-line.w60 {
+    width: 55%;
+    height: 17px;
+}
+
+.sk-line.w80 {
+    width: 78%;
+}
+
+.sk-line.w100 {
     width: 100%;
 }
 
-.nav-scroll {
-    display: flex;
-    gap: 0.6rem;
-    overflow-x: auto;
-    padding-bottom: 0.5rem;
-    scrollbar-width: none; /* Firefox */
-    -ms-overflow-style: none; /* IE/Edge */
+.sk-chips {
+    width: 62%;
+    height: 21px;
+    border-radius: var(--r-full);
 }
 
-.nav-scroll::-webkit-scrollbar {
-    display: none; /* Chrome/Safari */
+@keyframes sk-shimmer {
+    from {
+        background-position: 100% 50%;
+    }
+    to {
+        background-position: 0 50%;
+    }
 }
 
-.tab-btn {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    padding: 0.5rem 1.25rem;
-    border-radius: 99px;
-    white-space: nowrap;
-}
-
-.tab-btn.active {
-    background: var(--text-primary);
-    color: var(--bg-color);
-    border-color: var(--text-primary);
-}
-
-.weather-summary-bar {
-    display: flex;
-    gap: 0.6rem;
-    margin-top: 1rem;
-    overflow-x: auto;
-    padding-bottom: 0.5rem;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none; /* Firefox */
-    -ms-overflow-style: none; /* IE/Edge */
-}
-
-.weather-summary-bar::-webkit-scrollbar {
-    display: none; /* Chrome/Safari */
-}
-
-.weather-card-mini {
-    flex: 0 0 auto;
-    padding: 0.4rem 0.8rem;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border-color);
-    border-radius: 99px; /* 改為橢圓形更精簡 */
-}
-
-.w-compact {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    white-space: nowrap;
-}
-
-.w-icon-mini {
-    font-size: 1.1rem;
-    display: flex;
-    align-items: center;
-}
-
-.w-temp-mini {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.w-city-name {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.w-details-mini {
-    font-size: 0.8rem;
-    color: var(--accent-color);
-    font-weight: 500;
-}
-
-.sync-status {
-    font-size: 0.75rem;
-    color: var(--accent-color);
-    display: flex;
-    align-items: center;
-    margin-right: 0.5rem;
-    opacity: 0.8;
-}
-
-.sync-status.fetching {
-    color: #ffd700;
-}
-
-.empty-state {
-    max-width: 500px;
-    margin: 4rem auto;
+/* 空狀態 */
+.empty {
+    max-width: 460px;
+    margin: 3.5rem auto;
     text-align: center;
-    padding: 3rem 2rem;
 }
 
 .empty-icon {
-    font-size: 4rem;
-    margin-bottom: 1.5rem;
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 68px;
+    margin: 0 auto 1.3rem;
+    border-radius: 50%;
+    background: var(--brand-soft);
+    color: var(--brand);
 }
 
-.empty-state h2 {
-    margin-bottom: 1rem;
-    color: var(--text-primary);
+.empty h2 {
+    font-size: 1.3rem;
+    margin-bottom: 0.6rem;
 }
 
-.empty-state p {
-    color: var(--text-secondary);
-    margin-bottom: 2rem;
-    line-height: 1.6;
+.empty p {
+    color: var(--text-2);
+    font-size: 0.92rem;
+    margin-bottom: 1.7rem;
 }
 
 .empty-actions {
     display: flex;
-    gap: 1rem;
+    gap: 0.7rem;
     justify-content: center;
 }
 
-.primary-btn {
-    background: var(--text-primary);
-    color: var(--bg-color);
-    border: none;
-    padding: 0.8rem 1.5rem;
-    border-radius: 12px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.secondary-btn {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 0.8rem 1.5rem;
-    border-radius: 12px;
-    cursor: pointer;
-}
-
-.top-sync-indicator {
-    display: flex;
+.empty-warn {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    font-size: 0.8rem;
-    color: #ffd700;
-    margin-bottom: 1.5rem;
-    opacity: 0.8;
+    gap: 0.4rem;
+    margin-top: 1.8rem;
+    padding: 0.45rem 0.8rem;
+    border-radius: var(--r-full);
+    background: var(--warm-soft);
+    color: var(--warm);
+    font-size: 0.78rem;
 }
 
-.grid-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.5rem;
+.empty-warn code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
 }
 
-.summary-zone {
+/* 備註區 */
+.notes {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1.5rem;
-    margin-top: 2rem;
+    gap: 1rem;
+    margin-top: 2.2rem;
 }
 
-.glass-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border-color);
-    border-radius: 20px;
-    padding: 1.5rem;
+.note-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 1.25rem 1.35rem;
+    font-size: 0.88rem;
+    color: var(--text-2);
+    line-height: 1.75;
 }
 
-.pre-wrap {
-    white-space: pre-wrap;
-    line-height: 1.8;
+.note-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.95rem;
+    color: var(--text-1);
+    margin-bottom: 0.7rem;
 }
 
+.note-warn {
+    border-color: rgba(245, 166, 35, 0.28);
+    background: var(--warm-soft);
+}
+
+.note-warn h3 {
+    color: var(--warm);
+}
+
+/* ---------- 覆蓋層 ---------- */
 .loading-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.7);
-    backdrop-filter: blur(12px);
+    z-index: 3000;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     align-items: center;
-    z-index: 3000;
-}
-
-.spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid rgba(255,255,255,0.1);
-    border-top-color: var(--text-primary);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
+    justify-content: center;
+    gap: 1rem;
+    background: rgba(9, 11, 16, 0.78);
+    backdrop-filter: blur(12px);
+    color: var(--text-2);
+    font-size: 0.88rem;
 }
 
 .toast {
     position: fixed;
-    bottom: 2rem;
-    right: 2rem;
-    background: var(--text-primary);
-    color: var(--bg-color);
-    padding: 1rem 2rem;
-    border-radius: 8px;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem);
+    transform: translateX(-50%);
+    z-index: 4000;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    max-width: min(90vw, 420px);
+    padding: 0.75rem 1.15rem;
+    border-radius: var(--r-full);
+    background: var(--surface-modal);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-2);
+    font-size: 0.88rem;
+    font-weight: 500;
 }
 
-@media (max-width: 768px) {
-    .summary-zone { grid-template-columns: 1fr; }
-    header {
-        padding: 0.8rem 1rem;
-        margin-bottom: 1.5rem;
+.toast.success {
+    color: var(--success);
+    border-color: rgba(52, 211, 153, 0.35);
+}
+
+.toast.error {
+    color: var(--danger);
+    border-color: rgba(242, 85, 90, 0.35);
+}
+
+.toast-slide-enter-active,
+.toast-slide-leave-active {
+    transition: opacity 0.25s var(--ease), transform 0.28s var(--ease-pop);
+}
+
+.toast-slide-enter-from,
+.toast-slide-leave-to {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+}
+
+/* ---------- 響應式 ---------- */
+@media (max-width: 700px) {
+    .notes {
+        grid-template-columns: 1fr;
     }
-    .grid-container { display: flex; flex-direction: column; }
-    .empty-actions { flex-direction: column; }
-    .mini-spinner {
-        width: 12px;
-        height: 12px;
-        border: 2px solid rgba(255, 215, 0, 0.2);
-        border-top-color: #ffd700;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
+}
+
+@media (max-width: 560px) {
+    .app-header {
+        margin: 0 -1rem 1.3rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .act-label {
+        display: none;
+    }
+
+    .act-primary {
+        padding: 0 0.65rem;
+    }
+
+    .empty-actions {
+        flex-direction: column;
+    }
+
+    .empty {
+        margin: 2.5rem auto;
     }
 }
 </style>

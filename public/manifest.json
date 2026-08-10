@@ -4,8 +4,8 @@
   "description": "您的專屬智慧行程規劃工具",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
   "icons": [
     {
       "src": "favicon.svg",

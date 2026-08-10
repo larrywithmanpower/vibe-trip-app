@@ -1,36 +1,407 @@
-* {
+/* ============================================================
+   VibeTrip 設計系統
+   ------------------------------------------------------------
+   1. 設計代幣 (色彩 / 尺度 / 動態)
+   2. 基礎重置與版面
+   3. 共用元件樣式 (按鈕 / 表單 / 彈窗 / 拖曳)
+   ============================================================ */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
+/* ---------- 1. 設計代幣 ---------- */
 :root {
-  --bg-color: #0f1115;
-  --card-bg: rgba(255, 255, 255, 0.05);
-  --accent-color: #6366f1;
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --border-color: rgba(255, 255, 255, 0.1);
-  --success: #10b981;
-  --font-main: 'Inter', system-ui, -apple-system, sans-serif;
+  /* 底層 */
+  --bg: #090b10;
+  --bg-header: rgba(9, 11, 16, 0.82);
+  --surface-1: rgba(255, 255, 255, 0.035);
+  --surface-2: rgba(255, 255, 255, 0.07);
+  --surface-modal: #161a23;
+
+  /* 線條 */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* 文字（深底下的三層對比） */
+  --text-1: #eef2f8;
+  --text-2: #9aa5b8;
+  --text-3: #69738a;
+
+  /* 品牌色：連結用亮階確保深底可讀，實心按鈕用飽和階 */
+  --brand: #8b95ff;
+  --brand-fill: #5b63f0;
+  --brand-soft: rgba(99, 102, 241, 0.14);
+  --brand-ring: rgba(129, 140, 248, 0.4);
+
+  /* 語意色 */
+  --warm: #f5a623;
+  --warm-soft: rgba(245, 166, 35, 0.12);
+  --danger: #f2555a;
+  --danger-soft: rgba(242, 85, 90, 0.14);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.14);
+
+  /* 圓角 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-full: 999px;
+
+  /* 陰影 */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 14px 34px -14px rgba(0, 0, 0, 0.75);
+  --shadow-3: 0 34px 68px -26px rgba(0, 0, 0, 0.88);
+
+  /* 動態曲線 */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-pop: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  --font: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'PingFang TC', sans-serif;
+}
+
+/* ---------- 2. 基礎重置與版面 ---------- */
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background-color: var(--bg-color);
-  color: var(--text-primary);
-  font-family: var(--font-main);
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font);
+  font-size: 15px;
   line-height: 1.6;
   overflow-x: hidden;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
-  max-width: 1200px;
+  max-width: 920px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0 1.25rem calc(4rem + env(safe-area-inset-bottom, 0px));
 }
 
-@media (max-width: 768px) {
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* 橫向捲動列：隱藏捲軸但保留慣性 */
+.u-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.u-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+.u-prewrap {
+  white-space: pre-wrap;
+}
+
+/* ---------- 3-1. 共用按鈕 ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.7rem 1.3rem;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  font-size: 0.92rem;
+  font-weight: 600;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease),
+    transform 0.15s var(--ease), opacity 0.2s var(--ease);
+}
+
+.btn-primary {
+  background: var(--brand-fill);
+  color: #fff;
+  box-shadow: 0 6px 18px -8px var(--brand-fill);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #6a71f5;
+}
+
+.btn-ghost {
+  background: var(--surface-1);
+  border-color: var(--border);
+  color: var(--text-1);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.btn-quiet:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--surface-1);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---------- 3-2. 共用表單 ---------- */
+.field {
+  margin-bottom: 1.1rem;
+}
+
+.field > label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-bottom: 0.45rem;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 0.75rem 0.85rem;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-3);
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.textarea {
+  resize: none;
+  line-height: 1.6;
+}
+
+/* ---------- 3-3. 共用彈窗骨架 ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 6, 10, 0.72);
+  backdrop-filter: blur(10px);
+  padding: calc(env(safe-area-inset-top, 0px) + 1rem) 1rem
+    calc(env(safe-area-inset-bottom, 0px) + 1rem);
+}
+
+.modal-panel {
+  width: 100%;
+  max-width: 520px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-modal);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+}
+
+.modal-head {
+  padding: 1.4rem 1.5rem 0.9rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal-head h3 {
+  font-size: 1.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.modal-head p {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  margin-top: 0.35rem;
+}
+
+.modal-body {
+  padding: 0 1.5rem 0.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-foot {
+  padding: 1.1rem 1.5rem 1.4rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+/* 彈窗內的錯誤提示（取代原生 alert） */
+.modal-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: var(--danger-soft);
+  border: 1px solid rgba(242, 85, 90, 0.3);
+  color: #ffb3b6;
+  border-radius: var(--r-md);
+  padding: 0.65rem 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+/* 彈窗轉場 */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.25s var(--ease);
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+
+.modal-fade-enter-active .modal-panel {
+  animation: modal-pop 0.32s var(--ease-pop);
+}
+
+@keyframes modal-pop {
+  from {
+    transform: translateY(14px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ---------- 3-4. 拖曳排序狀態 ---------- */
+.sortable-ghost {
+  opacity: 0.45;
+}
+
+.sortable-ghost .card {
+  background: var(--brand-soft);
+  border-style: dashed;
+  border-color: var(--brand);
+}
+
+.sortable-chosen .card {
+  border-color: var(--border-strong);
+}
+
+.sortable-drag .card {
+  box-shadow: var(--shadow-3);
+}
+
+/* ---------- 讀取動畫 ---------- */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.spinner-mini {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 560px) {
   #app {
-    padding: 1rem;
+    padding: 0 1rem calc(3rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .modal-head,
+  .modal-body,
+  .modal-foot {
+    padding-left: 1.15rem;
+    padding-right: 1.15rem;
+  }
+
+  .modal-foot .btn {
+    flex: 1;
   }
 }
